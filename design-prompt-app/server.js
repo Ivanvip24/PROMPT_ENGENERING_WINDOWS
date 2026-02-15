@@ -3,6 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
 const { spawn, exec } = require('child_process');
+const os = require('os');
 const app = express();
 const PORT = 3001;
 
@@ -19,9 +20,83 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 app.use(express.static('public'));
 app.use('/uploads', express.static('uploads'));
+
+// Detect actual image format from file magic bytes and fix/convert if needed
+// Claude API only supports: JPEG, PNG, GIF, WebP
+async function fixImageExtension(filePath) {
+  try {
+    const buf = Buffer.alloc(12);
+    const fd = await fs.open(filePath, 'r');
+    await fd.read(buf, 0, 12, 0);
+    await fd.close();
+
+    let detectedFormat = null;
+    if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) {
+      detectedFormat = { ext: '.jpg', supported: true };
+    } else if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) {
+      detectedFormat = { ext: '.png', supported: true };
+    } else if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) {
+      detectedFormat = { ext: '.gif', supported: true };
+    } else if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+               buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) {
+      detectedFormat = { ext: '.webp', supported: true };
+    } else if ((buf[0] === 0x49 && buf[1] === 0x49 && buf[2] === 0x2A && buf[3] === 0x00) ||
+               (buf[0] === 0x4D && buf[1] === 0x4D && buf[2] === 0x00 && buf[3] === 0x2A)) {
+      detectedFormat = { ext: '.tiff', supported: false };
+    } else if (buf[0] === 0x42 && buf[1] === 0x4D) {
+      detectedFormat = { ext: '.bmp', supported: false };
+    }
+
+    if (!detectedFormat) return filePath;
+
+    // If format is unsupported by Claude API, convert to PNG
+    if (!detectedFormat.supported) {
+      const pngPath = filePath.replace(/\.[^.]+$/, '.png');
+      console.log(`🔄 Converting ${detectedFormat.ext} → .png (unsupported format): ${path.basename(filePath)}`);
+      try {
+        // Try sharp first (cross-platform, works on Windows/Mac/Linux)
+        const sharp = require('sharp');
+        await sharp(filePath).png().toFile(pngPath);
+      } catch (sharpErr) {
+        // Fallback: try PowerShell on Windows
+        if (process.platform === 'win32') {
+          await new Promise((resolve, reject) => {
+            const psCmd = `Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile('${filePath.replace(/'/g, "''")}'); $img.Save('${pngPath.replace(/'/g, "''")}', [System.Drawing.Imaging.ImageFormat]::Png); $img.Dispose()`;
+            exec(`powershell -Command "${psCmd}"`, { timeout: 10000 }, (err) => {
+              if (err) reject(err); else resolve();
+            });
+          });
+        } else {
+          // macOS fallback
+          await new Promise((resolve, reject) => {
+            exec(`sips -s format png "${filePath}" --out "${pngPath}"`, { timeout: 10000 }, (err) => {
+              if (err) reject(err); else resolve();
+            });
+          });
+        }
+      }
+      // Remove original file
+      await fs.unlink(filePath).catch(() => {});
+      return pngPath;
+    }
+
+    // If supported but extension is wrong, rename
+    const currentExt = path.extname(filePath).toLowerCase();
+    const normalize = ext => ext === '.jpeg' ? '.jpg' : ext;
+    if (normalize(currentExt) === normalize(detectedFormat.ext)) return filePath;
+
+    const newPath = filePath.replace(/\.[^.]+$/, detectedFormat.ext);
+    await fs.rename(filePath, newPath);
+    console.log(`🔧 Fixed image extension: ${path.basename(filePath)} → ${path.basename(newPath)}`);
+    return newPath;
+  } catch (e) {
+    console.error(`⚠️ fixImageExtension error: ${e.message}`);
+    return filePath;
+  }
+}
 
 // Project configurations with folder mappings
 const PROJECTS = {
@@ -76,7 +151,8 @@ DECORATION: ${params.decorationLevel || 8}/10
 COLORS: [4-6 color names, comma separated]
 TEXT: "${params.destination || 'DESTINATION'}" - [placement], [size %]
 STYLE: ${params.style ? params.style.charAt(0).toUpperCase() + params.style.slice(1) : 'Cartoon'} illustration, bold outlines, vibrant colors
-EDGE: Organic irregular shape
+EDGE: Organic irregular sticker-like silhouette — NEVER a square, rectangle, or hard-edged frame. Flowing scalloped/wavy edges that follow the natural contours of the design elements. The outer shape must be interesting and unique, like a die-cut sticker.
+BACKGROUND: Clean white/transparent — the design floats as an irregular shape, NOT inside any frame or border
 CREATE DESIGN
 
 ---
@@ -479,6 +555,10 @@ async function generateVariations(params, count, onVariationComplete) {
         output = await invokeClaude(projectType, modifiedInstruction, params);
       }
 
+      // Append mandatory design rules to every prompt (Gemini must see these)
+      const designRules = `\n\n⚠️ CRITICAL DESIGN RULES — MANDATORY:\n- OUTER SHAPE: The design MUST have an IRREGULAR, ORGANIC, STICKER-LIKE silhouette. NEVER a square, rectangle, or any hard-edged geometric frame.\n- EDGES: Flowing, scalloped, wavy, or die-cut edges that follow the natural contours of the design elements.\n- BACKGROUND: Clean white or transparent background. The design floats freely as an irregular shape — NO borders, NO frames, NO rectangular containers.\n- If the design looks like it's inside a square or rectangular frame, it is WRONG. Redesign with organic flowing edges.`;
+      output += designRules;
+
       const variation = {
         title: `Variation ${i + 1}`,
         prompt: output,
@@ -545,8 +625,12 @@ app.post('/api/generate-prompt-stream', upload.array('images'), async (req, res)
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    // Map uploaded images (now includes user-selected shape references)
-    const allImages = images.map(img => path.join(__dirname, 'uploads', path.basename(img.path)));
+    // Map uploaded images and fix extensions if MIME type doesn't match content
+    const allImages = [];
+    for (const img of images) {
+      const fixedPath = await fixImageExtension(img.path);
+      allImages.push(fixedPath);
+    }
 
     const params = {
       projectType,
@@ -706,8 +790,12 @@ RESPOND IN THIS EXACT JSON FORMAT ONLY (no other text):
 
 BE THOROUGH - read ALL text in the images including WhatsApp messages, handwriting, logos, signs, etc.`;
 
-    // Copy images to uploads folder for Claude to read
-    const imageFilenames = images.map(img => path.basename(img.path));
+    // Fix image extensions and collect filenames for Claude to read
+    const fixedImages = [];
+    for (const img of images) {
+      fixedImages.push(await fixImageExtension(img.path));
+    }
+    const imageFilenames = fixedImages.map(p => path.basename(p));
     const uploadPath = path.join(__dirname, 'uploads');
 
     // Build command with image reading
@@ -747,10 +835,10 @@ THEN: ${analyzePrompt}`;
       clearTimeout(timeoutTimer);
       console.log(`🤖 Analysis completed (exit: ${code})`);
 
-      // Clean up uploaded images
-      for (const img of images) {
+      // Clean up uploaded images (use fixed paths since they may have been renamed)
+      for (const imgPath of fixedImages) {
         try {
-          await fs.unlink(img.path);
+          await fs.unlink(imgPath);
         } catch (e) {}
       }
 
@@ -802,6 +890,221 @@ THEN: ${analyzePrompt}`;
       success: false,
       error: error.message
     });
+  }
+});
+
+// ============================================
+// SEND TO GEMINI - Cross-platform browser automation
+// ============================================
+
+app.post('/api/send-to-gemini', async (req, res) => {
+  try {
+    const { prompt, images } = req.body;
+
+    if (!prompt) {
+      return res.status(400).json({ success: false, error: 'No prompt provided' });
+    }
+
+    console.log(`\n🚀 Send to Gemini: prompt length=${prompt.length}, images=${images ? images.length : 0}`);
+
+    const timestamp = Date.now();
+    const tempDir = path.join(os.tmpdir(), `gemini-${timestamp}`);
+    await fs.mkdir(tempDir, { recursive: true });
+
+    // Save images as temp files
+    const imagePaths = [];
+    if (images && images.length > 0) {
+      for (let i = 0; i < images.length; i++) {
+        const img = images[i];
+        if (img.dataUrl) {
+          const matches = img.dataUrl.match(/^data:image\/(\w+);base64,(.+)$/s);
+          if (matches) {
+            const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+            const buffer = Buffer.from(matches[2], 'base64');
+            const filePath = path.join(tempDir, `ref-${i}.${ext}`);
+            await fs.writeFile(filePath, buffer);
+            imagePaths.push(filePath);
+            console.log(`  📷 Image ${i}: ${filePath}`);
+          }
+        }
+      }
+    }
+
+    // Write prompt to temp file
+    const promptFile = path.join(tempDir, 'prompt.txt');
+    await fs.writeFile(promptFile, prompt, 'utf8');
+
+    const platform = process.platform;
+
+    if (platform === 'win32') {
+      // ===== WINDOWS: PowerShell automation =====
+      // Build image clipboard steps for PowerShell
+      let imageSteps = '';
+      for (let i = 0; i < imagePaths.length; i++) {
+        const imgPath = imagePaths[i].replace(/\\/g, '\\\\').replace(/'/g, "''");
+        imageSteps += `
+# Paste image ${i + 1}
+$chrome = Get-Process chrome -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowTitle -ne ''}
+if ($chrome) { [void][System.Runtime.InteropServices.Marshal] }
+Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
+$img = [System.Drawing.Image]::FromFile('${imgPath}')
+[System.Windows.Forms.Clipboard]::SetImage($img)
+$img.Dispose()
+Start-Sleep -Milliseconds 300
+[System.Windows.Forms.SendKeys]::SendWait('^v')
+Start-Sleep -Milliseconds 1500
+`;
+      }
+
+      const psScript = `
+Add-Type -AssemblyName System.Windows.Forms
+
+# Open Gemini in Chrome
+Start-Process "chrome.exe" "https://gemini.google.com/app"
+Start-Sleep -Seconds 4
+
+${imageSteps}
+
+# Copy prompt text to clipboard and paste
+$promptText = Get-Content -Path '${promptFile.replace(/\\/g, '\\\\').replace(/'/g, "''")}' -Raw
+[System.Windows.Forms.Clipboard]::SetText($promptText)
+Start-Sleep -Milliseconds 300
+[System.Windows.Forms.SendKeys]::SendWait('^v')
+Start-Sleep -Milliseconds 500
+`;
+
+      const scriptFile = path.join(tempDir, 'automate.ps1');
+      await fs.writeFile(scriptFile, psScript, 'utf8');
+
+      console.log('  📝 Executing Gemini automation (PowerShell)...');
+
+      exec(`powershell -ExecutionPolicy Bypass -File "${scriptFile}"`, { timeout: 60000 }, (error, stdout, stderr) => {
+        // Cleanup after delay
+        setTimeout(() => {
+          fs.rm(tempDir, { recursive: true }).catch(() => {});
+        }, 60000);
+
+        if (error) {
+          console.error('  ❌ PowerShell error:', stderr || error.message);
+        } else {
+          console.log('  ✅ Gemini automation completed');
+        }
+      });
+
+    } else if (platform === 'darwin') {
+      // ===== macOS: AppleScript automation =====
+      // Write a Python helper script to copy image to clipboard (reliable macOS approach)
+      const clipboardHelperPath = path.join(tempDir, 'clipboard_image.py');
+      const clipboardHelper = `#!/usr/bin/env python3
+import sys
+from AppKit import NSImage, NSPasteboard
+
+image_path = sys.argv[1]
+image = NSImage.alloc().initWithContentsOfFile_(image_path)
+if not image:
+    print(f"Failed to load image: {image_path}", file=sys.stderr)
+    sys.exit(1)
+
+pb = NSPasteboard.generalPasteboard()
+pb.clearContents()
+pb.writeObjects_([image])
+print("OK")
+`;
+      await fs.writeFile(clipboardHelperPath, clipboardHelper, 'utf8');
+
+      // Build image paste steps
+      let imageSteps = '';
+      for (let i = 0; i < imagePaths.length; i++) {
+        const imgPath = imagePaths[i];
+        imageSteps += `
+-- Paste image ${i + 1}
+tell application "Google Chrome"
+  execute active tab of front window javascript "var el = document.querySelector('div[contenteditable=true][role=textbox]'); if(el){el.focus(); el.click();} 'ok'"
+end tell
+do shell script "python3 " & quoted form of "${clipboardHelperPath}" & " " & quoted form of "${imgPath}"
+delay 0.3
+tell application "System Events"
+  keystroke "v" using command down
+end tell
+delay 1.5
+`;
+      }
+
+      const appleScript = `
+-- Open new Gemini tab
+tell application "Google Chrome"
+  activate
+  tell front window
+    make new tab with properties {URL:"https://gemini.google.com/app"}
+  end tell
+  delay 1.5
+  repeat 30 times
+    if not (loading of active tab of front window) then exit repeat
+    delay 0.3
+  end repeat
+  repeat 20 times
+    set editorReady to execute active tab of front window javascript "document.querySelector('div[contenteditable=true][role=textbox]') ? 'ready' : 'waiting'"
+    if editorReady is "ready" then exit repeat
+    delay 0.5
+  end repeat
+  delay 0.5
+  execute active tab of front window javascript "var el = document.querySelector('div[contenteditable=true][role=textbox]'); if(el){el.focus(); el.click();} 'ok'"
+end tell
+
+-- STEP 1: Paste images first (if any)
+${imageSteps}
+
+-- STEP 2: Focus the text input again
+tell application "Google Chrome"
+  execute active tab of front window javascript "var el = document.querySelector('div[contenteditable=true][role=textbox]'); if(el){el.focus(); el.click();} 'ok'"
+end tell
+delay 0.2
+
+-- STEP 3: Paste prompt text last
+do shell script "cat " & quoted form of "${promptFile}" & " | pbcopy"
+delay 0.2
+tell application "System Events"
+  tell process "Google Chrome"
+    set frontmost to true
+  end tell
+  delay 0.3
+  keystroke "v" using command down
+end tell
+delay 0.5
+
+return "done"
+`;
+
+      const scriptFile = path.join(tempDir, 'automate.scpt');
+      await fs.writeFile(scriptFile, appleScript, 'utf8');
+
+      console.log('  📝 Executing Gemini automation (AppleScript)...');
+
+      exec(`osascript "${scriptFile}"`, { timeout: 60000 }, (error, stdout, stderr) => {
+        setTimeout(() => {
+          fs.rm(tempDir, { recursive: true }).catch(() => {});
+        }, 60000);
+
+        if (error) {
+          console.error('  ❌ AppleScript error:', stderr || error.message);
+        } else {
+          console.log('  ✅ Gemini automation completed');
+        }
+      });
+
+    } else {
+      // ===== Linux: xdotool + xclip approach =====
+      console.log('  ⚠️ Linux automation not fully supported - opening Gemini and copying to clipboard');
+      exec(`xdg-open "https://gemini.google.com/app"`, () => {});
+      exec(`cat "${promptFile}" | xclip -selection clipboard`, () => {});
+    }
+
+    res.json({ success: true, message: 'Sending to Gemini...', hasImages: imagePaths.length > 0 });
+
+  } catch (error) {
+    console.error('❌ Send to Gemini error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
