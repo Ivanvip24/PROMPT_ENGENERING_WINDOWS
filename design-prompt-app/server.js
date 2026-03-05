@@ -7,6 +7,56 @@ const os = require('os');
 const app = express();
 const PORT = 3001;
 
+// ═══ SANITIZE PROMPTS: Strip non-ASCII characters that garble in clipboard/Gemini ═══
+function sanitizePrompt(text) {
+  if (!text) return text;
+  return text
+    // Replace common Unicode punctuation with ASCII equivalents
+    .replace(/[\u2022\u2023\u25E6\u2043\u2219]/g, '-')   // bullets -> -
+    .replace(/[\u2013\u2014\u2015]/g, '-')                 // en/em dashes -> -
+    .replace(/[\u2018\u2019\u201A]/g, "'")                 // smart single quotes -> '
+    .replace(/[\u201C\u201D\u201E]/g, '"')                 // smart double quotes -> "
+    .replace(/\u2026/g, '...')                             // ellipsis -> ...
+    .replace(/\u00A0/g, ' ')                               // non-breaking space -> space
+    .replace(/\u00D7/g, 'x')                               // multiplication sign -> x
+    // Replace accented characters with ASCII equivalents
+    .replace(/[\u00E1\u00E0\u00E2\u00E4\u00E3]/g, 'a')    // a variants
+    .replace(/[\u00C1\u00C0\u00C2\u00C4\u00C3]/g, 'A')    // A variants
+    .replace(/[\u00E9\u00E8\u00EA\u00EB]/g, 'e')           // e variants
+    .replace(/[\u00C9\u00C8\u00CA\u00CB]/g, 'E')           // E variants
+    .replace(/[\u00ED\u00EC\u00EE\u00EF]/g, 'i')           // i variants
+    .replace(/[\u00CD\u00CC\u00CE\u00CF]/g, 'I')           // I variants
+    .replace(/[\u00F3\u00F2\u00F4\u00F6\u00F5]/g, 'o')    // o variants
+    .replace(/[\u00D3\u00D2\u00D4\u00D6\u00D5]/g, 'O')    // O variants
+    .replace(/[\u00FA\u00F9\u00FB\u00FC]/g, 'u')           // u variants
+    .replace(/[\u00DA\u00D9\u00DB\u00DC]/g, 'U')           // U variants
+    .replace(/\u00F1/g, 'n')                               // n tilde -> n
+    .replace(/\u00D1/g, 'N')                               // N tilde -> N
+    .replace(/\u00E7/g, 'c')                               // c cedilla -> c
+    .replace(/\u00C7/g, 'C')                               // C cedilla -> C
+    // Replace common emoji/symbols with text
+    .replace(/\u26A0\uFE0F?/g, '[!]')                      // warning sign
+    .replace(/\u26A1\uFE0F?/g, '>')                        // lightning bolt
+    .replace(/[\u2705\u2714\uFE0F?]/g, '[OK]')             // checkmarks
+    .replace(/\u274C/g, '[X]')                              // cross mark
+    .replace(/[\u2122\u00AE\u00A9]/g, '')                   // TM, R, C symbols
+    // Strip any remaining non-ASCII characters
+    .replace(/[^\x00-\x7F]/g, '');
+}
+
+// Ensure PATH includes common tool locations (needed when launched via Automator/hotkey)
+const extraPaths = [
+  `${process.env.HOME || process.env.USERPROFILE || ''}/.local/bin`,
+  '/usr/local/bin',
+  '/opt/homebrew/bin',
+  `${process.env.HOME || process.env.USERPROFILE || ''}/.nvm/versions/node/current/bin`
+].join(process.platform === 'win32' ? ';' : ':');
+if (process.platform === 'win32') {
+  process.env.PATH = `${extraPaths};${process.env.PATH}`;
+} else {
+  process.env.PATH = `${extraPaths}:${process.env.PATH}`;
+}
+
 // Configure multer for image uploads
 const storage = multer.diskStorage({
   destination: async (req, file, cb) => {
@@ -55,28 +105,22 @@ async function fixImageExtension(filePath) {
     // If format is unsupported by Claude API, convert to PNG
     if (!detectedFormat.supported) {
       const pngPath = filePath.replace(/\.[^.]+$/, '.png');
-      console.log(`🔄 Converting ${detectedFormat.ext} → .png (unsupported format): ${path.basename(filePath)}`);
-      try {
-        // Try sharp first (cross-platform, works on Windows/Mac/Linux)
-        const sharp = require('sharp');
-        await sharp(filePath).png().toFile(pngPath);
-      } catch (sharpErr) {
-        // Fallback: try PowerShell on Windows
-        if (process.platform === 'win32') {
-          await new Promise((resolve, reject) => {
-            const psCmd = `Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile('${filePath.replace(/'/g, "''")}'); $img.Save('${pngPath.replace(/'/g, "''")}', [System.Drawing.Imaging.ImageFormat]::Png); $img.Dispose()`;
-            exec(`powershell -Command "${psCmd}"`, { timeout: 10000 }, (err) => {
-              if (err) reject(err); else resolve();
-            });
+      console.log(`[~] Converting ${detectedFormat.ext} -> .png (unsupported format): ${path.basename(filePath)}`);
+      if (process.platform === 'win32') {
+        // Windows: try PowerShell System.Drawing
+        await new Promise((resolve, reject) => {
+          const psCmd = `Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile('${filePath.replace(/'/g, "''")}'); $img.Save('${pngPath.replace(/'/g, "''")}', [System.Drawing.Imaging.ImageFormat]::Png); $img.Dispose()`;
+          exec(`powershell -Command "${psCmd}"`, { timeout: 10000 }, (err) => {
+            if (err) reject(err); else resolve();
           });
-        } else {
-          // macOS fallback
-          await new Promise((resolve, reject) => {
-            exec(`sips -s format png "${filePath}" --out "${pngPath}"`, { timeout: 10000 }, (err) => {
-              if (err) reject(err); else resolve();
-            });
+        });
+      } else {
+        // macOS: use sips
+        await new Promise((resolve, reject) => {
+          exec(`sips -s format png "${filePath}" --out "${pngPath}"`, { timeout: 10000 }, (err) => {
+            if (err) reject(err); else resolve();
           });
-        }
+        });
       }
       // Remove original file
       await fs.unlink(filePath).catch(() => {});
@@ -90,10 +134,10 @@ async function fixImageExtension(filePath) {
 
     const newPath = filePath.replace(/\.[^.]+$/, detectedFormat.ext);
     await fs.rename(filePath, newPath);
-    console.log(`🔧 Fixed image extension: ${path.basename(filePath)} → ${path.basename(newPath)}`);
+    console.log(`[~] Fixed image extension: ${path.basename(filePath)} -> ${path.basename(newPath)}`);
     return newPath;
   } catch (e) {
-    console.error(`⚠️ fixImageExtension error: ${e.message}`);
+    console.error(`[!] fixImageExtension error: ${e.message}`);
     return filePath;
   }
 }
@@ -115,7 +159,7 @@ const PROJECTS = {
   'previous-element': {
     name: 'Design Based on a Previous Element',
     color: '#50C878',
-    icon: '🔄',
+    icon: '[~]',
     folder: '../Design Based on a Previous Element'
   },
   'modify': {
@@ -129,30 +173,83 @@ const PROJECTS = {
 // TURBO MODE: Ultra-fast function that skips documentation reading
 async function invokeClaudeTurbo(instruction, params) {
   return new Promise(async (resolve, reject) => {
-    // Build a self-contained turbo prompt with everything needed
-    const turboPrompt = `⚡ TURBO PROMPT GENERATOR - MAXIMUM SPEED ⚡
+    // Check if this is a letter-fill magnet design
+    const instructionLower = (instruction || '').toLowerCase();
+    const isLetterFill = params.productType === 'magnet' && /\b(letter.?fill|photo.?fill|each\s+letter\s+(shows?|contains?|filled|has)|inside\s+(of\s+)?(the\s+)?letters?|uneven\s+letters?|block\s+letters?|3d\s+letters?|chunky\s+letters?|letras?\s+(rellenas?|con\s+fotos?|con\s+imagenes?))\b/i.test(instructionLower);
 
-OUTPUT EXACTLY THIS FORMAT (150-250 words MAX):
+    let turboPrompt;
+
+    if (isLetterFill) {
+      // LETTER-FILL TURBO TEMPLATE
+      const destination = params.destination || 'DESTINATION';
+      const letters = destination.toUpperCase().split('');
+      const letterList = letters.map((l, i) => `- ${l}: [Iconic ${destination} scene #${i + 1}]`).join('\n');
+
+      turboPrompt = `> TURBO LETTER-FILL MAGNET GENERATOR >
+
+OUTPUT EXACTLY THIS FORMAT (80-150 words MAX):
+
+FORMAT: ${params.ratio || '2:1'}
+PRODUCT: Letter-fill souvenir magnet  - "${destination}"
+LETTER STYLE: Bold chunky 3D letters with natural wood material, slightly uneven heights for handcrafted feel
+LETTER ARRANGEMENT: "${destination}" spelled horizontally, each letter is a photo window
+PHOTO FILLS  - Each letter shows a DIFFERENT ${destination} scene:
+${letterList}
+MATERIAL: Natural wood border with subtly burned edges, vivid photos fill each letter edge-to-edge
+BACKGROUND: Clean white or transparent, no frames or borders
+STYLE: Photorealistic product shot of a physical souvenir magnet  - looks like a real product from a gift shop
+
+CREATE DESIGN
+
+---
+REQUEST: ${instruction}
+DESTINATION: ${destination}
+---
+
+CRITICAL: Keep it SIMPLE. No decoration, no supporting elements, no text banners. Just photo-filled letters as a product.
+RESPOND WITH ONLY THE FILLED PROMPT. NO EXPLANATIONS. START DIRECTLY WITH "FORMAT:"`;
+
+    } else {
+      // STANDARD TURBO TEMPLATE (visually rich version)
+      turboPrompt = `> TURBO PROMPT GENERATOR - MAXIMUM SPEED, MAXIMUM VISUAL IMPACT >
+
+OUTPUT EXACTLY THIS FORMAT (250-400 words):
 
 FORMAT: ${params.ratio || '1:1'}
-SUBJECT: [Describe main element + destination in ONE sentence]
+SUBJECT: [Describe main element + destination in ONE vivid sentence  - make it EXCITING]
+STYLE: ${(() => {
+        const turboStyleMap = {
+          'cartoon': 'Bold cartoon illustration with thick black outlines, highly saturated vibrant colors, dynamic shading, layered composition with depth  - like a premium die-cut sticker product',
+          'realistic': 'Detailed realistic illustration with rich textures, dramatic lighting, natural colors with punchy saturation, layered depth  - like a premium art print',
+          'collage': 'Rich mixed media collage with layered cutouts, torn paper edges, overlapping textures (fabric, paper, photos, patterns), dimensional depth  - like a handcrafted art piece',
+          'photography': 'Photography-based design with real photo elements integrated into richly illustrated decorative frames, cultural motifs, and layered compositions',
+          'hybrid': 'Hybrid Real+Cartoon  - real photographic elements (landmarks, objects, textures) seamlessly blended with bold cartoon illustrations, both styles interact naturally with overlapping layers and shared lighting'
+        };
+        return turboStyleMap[params.style] || (params.style ? params.style.charAt(0).toUpperCase() + params.style.slice(1) + ' style with rich details and layered depth' : 'Bold cartoon illustration with thick outlines, vibrant saturated colors, layered depth  - premium die-cut sticker quality');
+      })()}
 COMPOSITION:
-• [Hero element position and size %]
-• [Supporting elements arrangement]
-• [Visual flow direction]
-PROTAGONIST: [Main character/element - 25 words max]
-ELEMENTS:
-• [Element 1]
-• [Element 2]
-• [Element 3]
-• [Element 4]
-• [Element 5]
-DECORATION: ${params.decorationLevel || 8}/10
-COLORS: [4-6 color names, comma separated]
-TEXT: "${params.destination || 'DESTINATION'}" - [placement], [size %]
-STYLE: ${params.style ? params.style.charAt(0).toUpperCase() + params.style.slice(1) : 'Cartoon'} illustration, bold outlines, vibrant colors
-EDGE: Organic irregular sticker-like silhouette — NEVER a square, rectangle, or hard-edged frame. Flowing scalloped/wavy edges that follow the natural contours of the design elements. The outer shape must be interesting and unique, like a die-cut sticker.
-BACKGROUND: Clean white/transparent — the design floats as an irregular shape, NOT inside any frame or border
+- [Hero element position, size %, and POSE/ACTION described vividly]
+- [Supporting elements arrangement  - describe LAYERING and OVERLAP]
+- [Visual flow: where the eye enters, travels, and rests]
+- [Depth: foreground details, midground subject, background atmosphere]
+PROTAGONIST: [Main character/element  - 40 words: specific details about appearance, expression, clothing/texture, pose, distinctive features]
+ELEMENTS (10-15 items  - be SPECIFIC, not generic):
+- [Element 1  - specific species/type, color, position, how it interacts with other elements]
+- [Element 2]
+- [Element 3]
+- [Element 4]
+- [Element 5]
+- [Element 6]
+- [Element 7]
+- [Element 8]
+- [Element 9]
+- [Element 10]
+- [Add more if needed  - FILL THE DESIGN with rich cultural details]
+DECORATION: ${params.decorationLevel || 9}/10  - Fill ALL negative space with decorative details: scattered petals, cultural patterns, sparkles, micro-illustrations, confetti. NO large empty areas.
+COLORS: [6-8 BOLD saturated color names  - describe specific shades that create visual IMPACT and contrast]
+TEXT: "${params.destination || 'DESTINATION'}" - [placement: must be BOLD and PROMINENT], [size: 18-25% height], [style: described vividly  - dimensional, shadowed, decorated, integrated into design]
+EDGE: MANDATORY  - The outer silhouette must be IRREGULAR and ASYMMETRIC, shaped by the design elements themselves (a palm tree poking out one side, waves flowing along the bottom, flowers extending beyond borders). Think premium die-cut vinyl sticker with a COMPLEX, UNIQUE outline.
+BACKGROUND: Clean white/transparent  - the design floats as an irregular shape, NOT inside any frame, border, or circular badge
 CREATE DESIGN
 
 ---
@@ -161,31 +258,91 @@ ${params.destination ? `DESTINATION: ${params.destination}` : ''}
 ${params.theme ? `THEME: ${params.theme}` : ''}
 ---
 
+CRITICAL: The design must look like the BEST-SELLING souvenir product in a tourist shop  - visually RICH, PACKED with details, LAYERED with depth, using BOLD saturated colors. NOT a sparse sketch.
 RESPOND WITH ONLY THE FILLED PROMPT. NO EXPLANATIONS. NO INTRODUCTIONS. START DIRECTLY WITH "FORMAT:"`;
+    }
 
-    console.log(`\n⚡ TURBO MODE - Ultra-fast generation (no docs reading)`);
+    console.log(`\n> TURBO MODE - Ultra-fast generation (no docs reading)`);
 
     let output = '';
 
-    // Run from uploads directory (minimal, no CLAUDE.md files)
-    const turboPath = path.join(__dirname, 'uploads');
-    await fs.mkdir(turboPath, { recursive: true });
+    // ═══ ISOLATED TEMP DIRECTORY for turbo mode (prevents cross-contamination) ═══
+    const turboHasImages = (params.images && params.images.length > 0) || params.styleReferenceImage;
+    const turboTempDir = turboHasImages
+      ? path.join(__dirname, 'tmp', `turbo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+      : path.join(__dirname, 'tmp', 'turbo-empty');
+    await fs.mkdir(turboTempDir, { recursive: true });
+    const turboPath = turboTempDir;
 
-    // Handle images for turbo mode
+    // Handle images for turbo mode  - copy ONLY current images to isolated temp dir
     let turboImages = [];
     if (params.images && params.images.length > 0) {
       for (const imagePath of params.images) {
         const filename = path.basename(imagePath);
+        const destPath = path.join(turboTempDir, filename);
+        await fs.copyFile(imagePath, destPath);
         turboImages.push(filename);
       }
     }
 
-    let finalPrompt = turboPrompt;
-    if (turboImages.length > 0) {
-      finalPrompt = `FIRST: Read image file(s): ${turboImages.join(', ')}\nTHEN: ${turboPrompt}`;
+    // Handle style reference image for turbo mode
+    let turboStyleRef = null;
+    if (params.styleReferenceImage) {
+      turboStyleRef = path.basename(params.styleReferenceImage);
+      const destPath = path.join(turboTempDir, turboStyleRef);
+      await fs.copyFile(params.styleReferenceImage, destPath);
+      turboImages.push(turboStyleRef); // Add to file list so Claude can read it
     }
 
-    const command = `echo ${JSON.stringify(finalPrompt)} | claude`;
+    let finalPrompt = turboPrompt;
+
+    // Style reference injection (takes priority)
+    if (turboStyleRef) {
+      finalPrompt = `FIRST: Read the STYLE REFERENCE image: ${turboStyleRef}
+After reading, extract the EXACT art style (line work, shading, rendering, proportions), color palette (saturation, temperature), composition approach (density, layering), and decoration level.
+[!] Use the style reference as INSPIRATION for the visual language  - do NOT copy its quality. If the reference is low-res or blurry, IGNORE that. Only extract the STYLE.
+Your generated prompt MUST begin with a 2-3 sentence STYLE BLOCK that precisely describes this visual style so the image AI can replicate it. This overrides any style selection.
+ALSO include: "Crisp sharp ultra-detailed illustration, clean precise edges, no blur, no artifacts, high-resolution professional quality."
+${turboImages.length > 1 ? `\nALSO read these reference images: ${turboImages.filter(f => f !== turboStyleRef).join(', ')}` : ''}
+
+THEN: ${turboPrompt}`;
+    } else if (turboImages.length > 0) {
+      if (params.projectType === 'variations') {
+        // Turbo + variations + reference image: structured analysis
+        finalPrompt = `FIRST: Read image file(s): ${turboImages.join(', ')}
+
+IMPORTANT  - REFERENCE IMAGE VARIATION:
+After reading the image, identify: the PROTAGONIST (character/animal/element), their POSE, CLOTHING, SUPPORTING ELEMENTS, COLORS, and STYLE.
+Your generated prompt MUST describe the SAME protagonist and elements in a DIFFERENT pose/composition/context.
+Do NOT create a completely unrelated design. Keep the same character, same destination, same style.
+[!] If the reference image is low-quality/blurry  - IGNORE the quality, only extract the STYLE and CONCEPT. Your prompt must produce a CRISP, SHARP result.
+Include in your prompt: "Crisp sharp ultra-detailed illustration, clean precise edges, no blur, no artifacts, high-resolution professional quality, vivid saturated colors."
+
+THEN: ${turboPrompt}`;
+      } else {
+        // ALL project types with reference images in turbo mode: analyze style
+        finalPrompt = `FIRST: Read image file(s): ${turboImages.join(', ')}
+
+IMPORTANT  - REFERENCE IMAGE ANALYSIS (INSPIRATION ONLY):
+After reading the image(s), analyze them as INSPIRATION  - do NOT copy them literally. Extract:
+- ART STYLE: line weight, shading approach, proportions, rendering technique
+- COLOR PALETTE: dominant colors, saturation level, temperature
+- COMPOSITION APPROACH: layout pattern, element density, depth layering
+- KEY ELEMENTS: types of characters, flora, fauna, cultural objects
+
+[!] CRITICAL QUALITY RULES:
+- Treat reference images as MOOD/STYLE INSPIRATION  - create something COMPLETELY NEW but inspired by their aesthetic
+- NEVER describe the reference image literally  - instead, create an ORIGINAL composition in the same visual spirit
+- Your prompt MUST include these quality keywords: "crisp sharp vector illustration", "clean precise edges", "high-resolution detailed artwork", "professional product-quality rendering"
+- If the reference image looks low-resolution or blurry, IGNORE the quality  - only extract the STYLE and CONCEPT, then describe a PRISTINE high-quality version
+- Add to your prompt: "ultra-detailed, sharp clean lines, vibrant saturated colors, no blur, no artifacts, no soft edges, professional illustration quality"
+
+THEN: ${turboPrompt}`;
+      }
+    }
+
+    const turboFlags = turboImages.length > 0 ? '--allowedTools "Read,Glob"' : '';
+    const command = `echo ${JSON.stringify(finalPrompt)} | claude -p ${turboFlags}`;
 
     const claude = spawn(command, [], {
       cwd: turboPath,
@@ -193,9 +350,17 @@ RESPOND WITH ONLY THE FILLED PROMPT. NO EXPLANATIONS. NO INTRODUCTIONS. START DI
       env: { ...process.env }
     });
 
+    // Cleanup turbo temp directory
+    const cleanupTurbo = async () => {
+      if (turboHasImages && turboTempDir) {
+        try { await fs.rm(turboTempDir, { recursive: true, force: true }); } catch { /* ok */ }
+      }
+    };
+
     // Short timeout for turbo mode (30 seconds max)
-    const timeoutTimer = setTimeout(() => {
+    const timeoutTimer = setTimeout(async () => {
       claude.kill();
+      await cleanupTurbo();
       if (output && output.length > 50) {
         resolve(output);
       } else {
@@ -211,9 +376,10 @@ RESPOND WITH ONLY THE FILLED PROMPT. NO EXPLANATIONS. NO INTRODUCTIONS. START DI
       console.error('stderr:', data.toString());
     });
 
-    claude.on('close', (code) => {
+    claude.on('close', async (code) => {
       clearTimeout(timeoutTimer);
-      console.log(`⚡ Turbo completed (exit: ${code})`);
+      console.log(`> Turbo completed (exit: ${code})`);
+      await cleanupTurbo();
 
       if (output && output.length > 50) {
         // Clean output - remove any greeting text
@@ -228,8 +394,9 @@ RESPOND WITH ONLY THE FILLED PROMPT. NO EXPLANATIONS. NO INTRODUCTIONS. START DI
       }
     });
 
-    claude.on('error', (error) => {
+    claude.on('error', async (error) => {
       clearTimeout(timeoutTimer);
+      await cleanupTurbo();
       reject(new Error(`Turbo error: ${error.message}`));
     });
   });
@@ -246,26 +413,151 @@ async function invokeClaude(projectType, instruction, params) {
 
     const projectPath = path.join(__dirname, project.folder);
 
-    // Copy images to project directory if provided (Claude Code can only access files in its working directory)
-    let projectImages = [];
-    if (params.images && params.images.length > 0) {
+    // ═══ ISOLATED TEMP DIRECTORY (prevents cross-contamination between requests) ═══
+    // Instead of copying images INTO the project directory (where old images accumulate),
+    // create a fresh temp directory with ONLY: CLAUDE.md + reference files + current images.
+    const hasImages = (params.images && params.images.length > 0) || params.styleReferenceImage;
+    const tempDir = hasImages ? path.join(__dirname, 'tmp', `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`) : null;
+
+    let projectImages = []; // tracks files for cleanup
+    let styleRefProjectPath = null;
+
+    if (tempDir) {
       try {
-        for (const imagePath of params.images) {
-          const filename = path.basename(imagePath);
-          const destPath = path.join(projectPath, filename);
-          await fs.copyFile(imagePath, destPath);
-          projectImages.push(destPath);
-          console.log(`📁 Copied image to project: ${filename}`);
+        await fs.mkdir(tempDir, { recursive: true });
+        console.log(`[+] Created isolated temp dir: ${path.basename(tempDir)}`);
+
+        // Copy CLAUDE.md and reference docs from project directory to temp dir
+        const projectFiles = await fs.readdir(projectPath);
+        for (const file of projectFiles) {
+          // Only copy documentation files, NOT images
+          if (file.endsWith('.md') || file.endsWith('.txt')) {
+            await fs.copyFile(path.join(projectPath, file), path.join(tempDir, file));
+          }
+        }
+        // Also copy reference subdirectory if it exists
+        const refDir = path.join(projectPath, 'reference');
+        try {
+          const refFiles = await fs.readdir(refDir);
+          const tempRefDir = path.join(tempDir, 'reference');
+          await fs.mkdir(tempRefDir, { recursive: true });
+          for (const file of refFiles) {
+            if (file.endsWith('.md') || file.endsWith('.txt')) {
+              await fs.copyFile(path.join(refDir, file), path.join(tempRefDir, file));
+            }
+          }
+        } catch { /* no reference dir, that's fine */ }
+
+        // Copy current request images to temp dir
+        if (params.images && params.images.length > 0) {
+          for (const imagePath of params.images) {
+            const filename = path.basename(imagePath);
+            const destPath = path.join(tempDir, filename);
+            await fs.copyFile(imagePath, destPath);
+            projectImages.push(destPath);
+            console.log(`[+] Copied image to temp dir: ${filename}`);
+          }
+        }
+
+        // Copy style reference image to temp dir
+        if (params.styleReferenceImage) {
+          const styleRefFilename = 'style-ref-' + path.basename(params.styleReferenceImage);
+          styleRefProjectPath = path.join(tempDir, styleRefFilename);
+          await fs.copyFile(params.styleReferenceImage, styleRefProjectPath);
+          projectImages.push(styleRefProjectPath);
+          console.log(`[+] Copied style reference to temp dir: ${styleRefFilename}`);
         }
       } catch (error) {
-        console.error('❌ Error copying images:', error);
-        reject(new Error(`Failed to copy images to project directory: ${error.message}`));
+        console.error('[X] Error setting up temp directory:', error);
+        reject(new Error(`Failed to set up isolated directory: ${error.message}`));
         return;
       }
     }
 
     // Build the full instruction with parameters
     let fullInstruction = instruction;
+
+    // ═══ VISUAL RICHNESS PREAMBLE (for from-scratch and previous-element) ═══
+    // These modes were producing sparse, minimal designs. This injects a mandate
+    // for visual density, layered details, and attention-grabbing richness.
+    if (projectType === 'from-scratch' || projectType === 'previous-element') {
+      fullInstruction += `\n\n${'='.repeat(50)}
+> MANDATORY VISUAL RICHNESS RULES (NON-NEGOTIABLE)
+${'='.repeat(50)}
+
+Your output prompt MUST produce a design that is VISUALLY RICH, DENSE, and ATTENTION-GRABBING. Think: the best-selling souvenir sticker/magnet in a tourist shop  - the one that catches your eye from 10 feet away.
+
+RICHNESS REQUIREMENTS:
+1. **PACKED WITH DETAILS**  - Every area of the design should have something interesting. No large empty zones. Fill negative space with decorative elements: flowers, patterns, butterflies, sparkles, cultural motifs, micro-details.
+2. **LAYERED DEPTH**  - Create at least 3 visual layers: foreground elements (close, detailed), midground (main subject), background (atmospheric, softer). Elements should OVERLAP and interact, not float in isolation.
+3. **VIVID SATURATED COLORS**  - Use BOLD, PUNCHY, highly saturated colors. No washed-out pastels or muted tones unless specifically requested. Colors should POP and be eye-catching.
+4. **10+ SUPPORTING ELEMENTS**  - Don't stop at 5 elements. Include 10-15 specific cultural/regional details: local flowers (by species name), animals, architectural details, food, patterns, textiles, landmarks. Each one described specifically, not generically.
+5. **RICH TEXTURES**  - Describe specific textures: embroidered fabric patterns, carved wood grain, glossy ceramics, hand-painted tile patterns, woven textile motifs, metallic accents.
+6. **DECORATION DENSITY 8-10/10**  - Default to HIGH decoration density. Every corner, edge, and gap should have decorative fills: scattered petals, tiny stars, confetti, cultural patterns, micro-illustrations.
+7. **DYNAMIC COMPOSITION**  - The design should have MOVEMENT and energy: flowing curves, diagonal elements, overlapping layers, elements that break out of boundaries.
+8. **PREMIUM PRODUCT LOOK**  - This should look like a HIGH-END professionally designed product, not a quick sketch or simple illustration. Think: award-winning travel poster meets premium die-cut sticker.
+
+[X] NEVER produce a sparse design with 3-4 floating elements on a white background
+[X] NEVER produce a flat, single-layer composition with no depth
+[X] NEVER use generic descriptions like "local flowers"  - name SPECIFIC species
+[X] NEVER leave large empty areas unfilled
+[OK] ALWAYS aim for the WOW factor  - the design someone would instantly want to buy
+[OK] ALWAYS make text integration bold and visually striking (not just floating text)
+[OK] ALWAYS describe specific color combinations that create visual IMPACT
+${'='.repeat(50)}`;
+    }
+
+    // ═══ STYLE REFERENCE IMAGE ANALYSIS ═══
+    if (styleRefProjectPath) {
+      const styleRefFilename = path.basename(styleRefProjectPath);
+      fullInstruction += `\n\n${'='.repeat(50)}
+[!] MANDATORY STYLE REFERENCE IMAGE (NON-NEGOTIABLE)
+${'='.repeat(50)}
+
+BEFORE generating any prompt, you MUST read and deeply analyze this STYLE REFERENCE IMAGE:
+File: ${styleRefFilename}
+
+Use the Read tool to read this image file. Then extract and REPLICATE in your output prompt ALL of the following:
+
+A) ART STYLE (copy EXACTLY from reference):
+- Line style: thick/thin/no outlines? Black outlines? Line weight?
+- Shading approach: flat colors? gradients? cell-shading? watercolor? soft shadows?
+- Rendering: clean vector? hand-drawn? textured? digital painting? realistic?
+- Overall aesthetic: cute/kawaii? vintage? modern? folk art? sticker-art? premium?
+
+B) COLOR PALETTE (match EXACTLY from reference):
+- Identify the 6-8 dominant colors and their exact saturation/temperature
+- Note color relationships (complementary, analogous, triadic, etc.)
+- Your output prompt MUST use the SAME color family and saturation level as the reference
+
+C) COMPOSITION APPROACH (replicate from reference):
+- Layout pattern: centered? layered? radial? diagonal? scattered?
+- Element density: how packed/sparse is the reference?
+- Depth layering: how many visual layers? How do they overlap?
+- Negative space usage: minimal? balanced? generous?
+
+D) TEXTURE & DETAIL LEVEL (match from reference):
+- Surface textures: smooth? rough? embroidered? glossy? matte?
+- Detail density: minimal? moderate? intricate? maximal?
+- Decorative fills: what fills the gaps? patterns? petals? sparkles?
+
+E) MOOD & ENERGY (capture from reference):
+- Overall feeling: playful? sophisticated? festive? dramatic? warm?
+- Visual energy: calm? dynamic? explosive? whimsical?
+
+YOUR OUTPUT PROMPT MUST:
+1. Begin with a 3-4 sentence STYLE BLOCK that describes this EXACT visual style so the image AI can replicate it
+2. Use the SAME color palette, saturation, and temperature as the reference
+3. Match the SAME level of detail density and decoration
+4. Replicate the SAME art style and rendering approach
+5. Include these MANDATORY quality keywords: "Crisp, sharp, ultra-detailed illustration. Clean precise edges, no blur, no artifacts, no soft unfocused areas. High-resolution professional product-quality rendering. Vivid saturated colors with strong contrast."
+
+[!] IMPORTANT: If the style reference image is low-resolution, blurry, or has compression artifacts  - COMPLETELY IGNORE the image quality. Extract ONLY the artistic style, color palette, and composition approach. Your prompt must produce a PRISTINE, SHARP, DETAILED result regardless of the reference's quality.
+
+This style reference OVERRIDES the style dropdown selection. The reference image IS the style.
+DO NOT deviate from this style. DO NOT use a different art style, color palette, or composition approach.
+${'='.repeat(50)}`;
+    }
 
     // Add context based on parameters
     if (params.destination) {
@@ -294,15 +586,17 @@ You MUST use exactly this creativity level. A level of ${params.crazymeter}/10 m
       const styleNames = {
         'cartoon': 'Cartoon - Playful cartoon style with bold outlines and vibrant colors',
         'realistic': 'Realistic - Detailed realistic illustration with natural colors and textures',
-        'collage': 'Collage - CRITICAL: Create a true mixed media COLLAGE design with these specific requirements:\n  • Use layered cutout style with visible edges and overlapping elements\n  • Include varied textures (paper, fabric, photo fragments, patterns)\n  • Mix different art styles and media types (photos, illustrations, patterns, text)\n  • Create depth through overlapping layers with shadows/highlights\n  • Use irregular torn/cut edges on elements (NOT perfect vector shapes)\n  • Include decorative elements like tape, borders, stamps, or stitching effects\n  • Intentional composition that looks hand-assembled from multiple sources\n  • This should look like physical collage art, NOT a regular illustration',
-        'photography': 'Photography - Photography-based design with real photo elements integrated into the composition. Combine real photography with illustrated elements, decorative frames, or use photos as texture fills for regional shapes.'
+        'collage': 'Collage - CRITICAL: Create a true mixed media COLLAGE design with these specific requirements:\n  - Use layered cutout style with visible edges and overlapping elements\n  - Include varied textures (paper, fabric, photo fragments, patterns)\n  - Mix different art styles and media types (photos, illustrations, patterns, text)\n  - Create depth through overlapping layers with shadows/highlights\n  - Use irregular torn/cut edges on elements (NOT perfect vector shapes)\n  - Include decorative elements like tape, borders, stamps, or stitching effects\n  - Intentional composition that looks hand-assembled from multiple sources\n  - This should look like physical collage art, NOT a regular illustration',
+        'photography': 'Photography - Photography-based design with real photo elements integrated into the composition. Combine real photography with illustrated elements, decorative frames, or use photos as texture fills for regional shapes.',
+        'hybrid': 'Hybrid Real+Cartoon - CRITICAL: Create a design that seamlessly BLENDS real photographic elements with cartoon/illustrated elements so they complement each other:\n  - Use REAL photographic imagery for key elements (landmarks, animals, objects, food, nature, textures)  - these should look like actual photographs\n  - Use CARTOON/ILLUSTRATED style for characters, decorative elements, borders, typography, and supporting graphics  - bold outlines, vibrant flat colors\n  - The real and cartoon elements must INTERACT and OVERLAP naturally (e.g., a cartoon character sitting on a real photographed rock, illustrated flowers growing around a real building photo, cartoon birds flying over a real landscape)\n  - Create a cohesive composition where neither style dominates  - they work together harmoniously\n  - Use shadows, lighting, and scale to make the blend feel intentional and polished, not like a lazy paste job\n  - Think: Who Framed Roger Rabbit meets travel poster  - the real world and the illustrated world coexist beautifully'
       };
       fullInstruction += `\nStyle: ${styleNames[params.style] || params.style}`;
     }
     if (params.ratio) {
       const ratioFormats = {
         '1:1': 'Square 1:1',
-        '2:1': 'Rectangular 2:1 (horizontal landscape)'
+        '2:1': 'Rectangular 2:1 (horizontal landscape)',
+        '1:2': 'Vertical 1:2 (tall portrait)'
       };
       fullInstruction += `\nFormat/Ratio: ${ratioFormats[params.ratio] || params.ratio}`;
     }
@@ -314,12 +608,12 @@ You MUST use exactly this creativity level. A level of ${params.crazymeter}/10 m
         fullInstruction += `\n\nMANDATORY BOTTLE OPENER SHAPE (CRITICAL - NON-NEGOTIABLE):
 
 EXACT SHAPE REQUIREMENTS - Study the reference images carefully:
-• TOP SECTION: Large rounded opening (upside-down U or rounded rectangle) where bottle cap fits - this opening is ESSENTIAL and must be clearly visible
-• OVERALL PROPORTIONS: Tall vertical format, approximately 6" height x 3" width ratio
-• MIDDLE SECTION: Narrower "neck" area (2-2.5" wide) with gentle organic curves on sides
-• BOTTOM SECTION: Wider rounded base (3.5-4" wide, occupying 35-40% of height) for stability
-• ALL EDGES: Organic flowing curves following design elements - NO straight lines or hard corners
-• STRUCTURAL INTEGRITY: All decorative elements connect to main composition, no floating parts
+- TOP SECTION: Large rounded opening (upside-down U or rounded rectangle) where bottle cap fits - this opening is ESSENTIAL and must be clearly visible
+- OVERALL PROPORTIONS: Tall vertical format, approximately 6" height x 3" width ratio
+- MIDDLE SECTION: Narrower "neck" area (2-2.5" wide) with gentle organic curves on sides
+- BOTTOM SECTION: Wider rounded base (3.5-4" wide, occupying 35-40% of height) for stability
+- ALL EDGES: Organic flowing curves following design elements - NO straight lines or hard corners
+- STRUCTURAL INTEGRITY: All decorative elements connect to main composition, no floating parts
 
 The reference images show EXACTLY how this should look. Your design MUST match this silhouette - it's a functional product, not a decorative rectangle or circle. The top opening and bottom base widening are the defining features that make this recognizable as a bottle opener.
 
@@ -328,7 +622,7 @@ VISUAL CHECK: If someone saw just the outline/silhouette, would they recognize i
     }
 
     console.log(`\n${'='.repeat(60)}`);
-    console.log(`🎨 INVOKING CLAUDE CODE`);
+    console.log(`INVOKING CLAUDE CODE`);
     console.log(`Project: ${project.name}`);
     console.log(`Directory: ${projectPath}`);
     console.log(`Instruction: ${fullInstruction.substring(0, 200)}...`);
@@ -348,12 +642,207 @@ VISUAL CHECK: If someone saw just the outline/silhouette, would they recognize i
     // Add image file reading instruction if images are provided
     if (projectImages.length > 0) {
       const imageFilenames = projectImages.map(img => path.basename(img));
-      fullInstruction = `FIRST: Use the Read tool to read these image file(s) in the current directory:\n${imageFilenames.map((f, i) => `${i + 1}. ${f}`).join('\n')}\n\nTHEN: ${fullInstruction}`;
+
+      // For VARIATIONS with reference images: structured two-phase analysis
+      if (projectType === 'variations') {
+        fullInstruction = `[!] OVERRIDE: When reference images are provided, the "fresh unique creation" and "NO cross-referencing" rules DO NOT APPLY. Your job is to create variations OF THE REFERENCE IMAGE, not ignore it.
+
+PHASE 1  - DEEPLY ANALYZE THE REFERENCE IMAGE(S):
+Use the Read tool to read these image file(s) in the current directory:
+${imageFilenames.map((f, i) => `${i + 1}. ${f}`).join('\n')}
+
+After reading, you MUST extract ALL of the following in detail:
+
+A) PROTAGONIST IDENTITY:
+- Exact character type (e.g., "chibi-style Lele doll with oversized head, tiny body")
+- Exact clothing details (colors, patterns, embroidery, ribbons)
+- Hair style, accessories, facial expression
+- Body proportions (chibi? realistic? kawaii?)
+
+B) SPECIFIC ART STYLE (THIS IS CRITICAL  - describe precisely):
+- Line style: thick/thin outlines? black outlines? no outlines? line weight?
+- Shading: flat colors? gradients? cell-shading? watercolor? soft shadows?
+- Proportions: chibi/kawaii? realistic? exaggerated?
+- Color approach: saturated? pastel? muted? neon? specific color temperature?
+- Rendering: clean vector? hand-drawn? textured? digital painting?
+- Overall aesthetic: cute/kawaii? vintage? modern? folk art? sticker-art?
+
+C) ELEMENTS & COMPOSITION:
+- Supporting elements: exact flowers, animals, objects (species, colors)
+- Layout: centered? diagonal? layered? symmetrical?
+- Background treatment: white? colored? gradient? scene?
+- Decorative details: borders, sparkles, confetti, patterns?
+- Text placement and style if any
+
+PHASE 2  - GENERATE A VARIATION PROMPT THAT REPLICATES THE EXACT STYLE:
+Your output prompt MUST begin with a detailed STYLE BLOCK that describes the EXACT visual style from the reference so the image AI can replicate it. This is the most important part.
+
+YOUR PROMPT MUST INCLUDE (in this order):
+1. STYLE DESCRIPTION (2-3 sentences): Describe the exact rendering style, line work, shading, and proportions from the reference. Be hyper-specific. Use terms like: "crisp vector illustration", "sharp clean edges", "flat solid color fills", "no soft shading, no airbrush, no painterly effects", "like a professional die-cut sticker product". If the reference has a clean vector look, emphasize: "sharp vector art, NOT soft cartoon, NOT watercolor, NOT painterly  - crisp clean edges like a vinyl sticker or enamel pin."
+2. PROTAGONIST: Describe the SAME character with SAME clothing/accessories but in a DIFFERENT pose or action.
+3. ELEMENTS: Use the SAME types of supporting elements (same flower species, same animals) but arranged differently.
+4. COMPOSITION: Different layout than the reference.
+5. PRODUCT-READY SILHOUETTE: The design MUST look like a FINISHED PRODUCT  - a die-cut magnet/sticker with an IRREGULAR custom silhouette. It must NOT look like a wallpaper, poster, illustration, or image inside a rectangle. The design should float on white/transparent background with its own unique organic outline shaped by the elements themselves. If someone printed this and cut along the outer edge, it should have a complex, interesting shape.
+
+WHAT TO KEEP (sacred  - non-negotiable):
+[OK] EXACT same art style, line work, shading, and rendering approach
+[OK] EXACT same protagonist character with same clothing and accessories
+[OK] Same types of supporting elements (if reference has marigolds and hummingbirds, variation has marigolds and hummingbirds)
+[OK] Same color palette and saturation level
+[OK] Same overall aesthetic feel (if reference looks like a sticker, variation looks like a sticker too)
+
+WHAT TO CHANGE (variation elements):
+[~] Protagonist pose, gesture, or action (sitting -> standing, holding flowers -> waving, etc.)
+[~] Composition layout (centered -> off-center, horizontal -> vertical, etc.)
+[~] Arrangement and placement of supporting elements
+[~] Small decorative detail differences (different flower arrangement, different butterfly positions)
+
+WHAT TO NEVER DO:
+[X] Do NOT change the art style (if reference is kawaii chibi, don't output realistic or painterly)
+[X] Do NOT change the protagonist's identity or clothing
+[X] Do NOT use different types of elements (if reference has hummingbirds, don't replace with parrots)
+[X] Do NOT create a completely unrelated design
+[X] Do NOT output a generic "cartoon style" description  - be SPECIFIC about the exact style
+[X] Do NOT create a design that looks like a wallpaper, poster, or rectangular image  - it MUST look like a die-cut PRODUCT with a custom irregular silhouette on white/transparent background
+[X] Do NOT use badge, emblem, medallion, circle, or frame compositions  - the silhouette must be ORGANIC and IRREGULAR
+[X] Do NOT add background gradients, sunset colors, textures, or atmospheric effects unless the reference image has them. If the reference has a WHITE/TRANSPARENT background, your prompt MUST have a white/transparent background too
+[X] Do NOT use terms like "gouache", "watercolor", "painterly", "screen-print texture" if the reference is clean flat vector
+[X] Do NOT write extremely long prompts. Keep the prompt between 150-350 words. Longer prompts confuse the image AI and dilute the style instructions
+[X] Do NOT reproduce the reference image's QUALITY  - if it's blurry, low-res, or has artifacts, IGNORE that. Only extract the STYLE and CONCEPT.
+
+MANDATORY QUALITY KEYWORDS (include in EVERY prompt you generate):
+Your output prompt MUST include these quality instructions to ensure crisp results:
+- "Crisp, sharp, ultra-detailed illustration"
+- "Clean precise edges, no blur, no artifacts, no soft unfocused areas"
+- "High-resolution professional product-quality rendering"
+- "Vivid saturated colors with strong contrast"
+These override any low quality from the reference image. The AI must generate SHARP output.
+
+PROMPT FORMAT RULES:
+- The prompt must be CONCISE (150-350 words max). Short, clear prompts produce better results than long verbose ones.
+- The STYLE BLOCK must be the FIRST thing in the prompt and must be the STRONGEST instruction.
+- Do NOT include "WHAT THIS IS NOT" sections, "CRAZYMETER NOTES", "CONCEPT SUMMARIES", or other meta-commentary  - just the prompt itself.
+- Do NOT include verification checklists or checkbox sections inside the prompt  - those go AFTER the prompt.
+- Background must be CLEAN WHITE or TRANSPARENT unless the reference specifically shows otherwise.
+- Every instruction in the prompt must be CONSISTENT  - do not say "white background" in one place and "sunset gradient" in another.
+
+THEN GENERATE THE PROMPT BASED ON: ${fullInstruction}`;
+      } else {
+        // ALL other project types with reference images: INSPIRATION-BASED analysis
+        fullInstruction = `FIRST: Use the Read tool to read these image file(s) in the current directory:
+${imageFilenames.map((f, i) => `${i + 1}. ${f}`).join('\n')}
+
+${'='.repeat(50)}
+[!] CRITICAL: INSPIRATION ONLY  - DO NOT COPY LITERALLY
+${'='.repeat(50)}
+
+These reference images are for INSPIRATION and STYLE EXTRACTION only. You must create a COMPLETELY NEW, ORIGINAL design that is INSPIRED BY the reference  - NOT a reproduction of it.
+
+STEP 1  - ANALYZE (extract these from the reference):
+
+A) ART STYLE (the visual language to replicate):
+- Line style: thick/thin outlines? black outlines? no outlines? line weight?
+- Shading: flat colors? gradients? cell-shading? watercolor? soft shadows?
+- Proportions: chibi/kawaii? realistic? exaggerated?
+- Rendering: clean vector? hand-drawn? textured? digital painting?
+- Overall aesthetic: cute/kawaii? vintage? modern? folk art? sticker-art?
+
+B) COLOR PALETTE (the color family to use):
+- Dominant colors, saturation level, color temperature
+- Use the SAME color family but in your OWN original composition
+
+C) MOOD & ENERGY (the feeling to capture):
+- Playful? sophisticated? festive? dramatic? whimsical?
+- Element density: packed? moderate? minimal?
+
+STEP 2  - CREATE SOMETHING NEW (do NOT copy the image):
+
+[X] DO NOT describe what you see in the reference image literally
+[X] DO NOT reproduce the same composition or layout
+[X] DO NOT copy specific poses, arrangements, or element positions
+[X] If the reference image is blurry, low-res, or has artifacts  - IGNORE the quality entirely
+
+[OK] DO create a FRESH, ORIGINAL design using the same VISUAL STYLE
+[OK] DO use the same COLOR FAMILY but in a new arrangement
+[OK] DO capture the same MOOD and ENERGY level
+[OK] DO imagine you are a professional illustrator who saw the reference once, then created something original from memory
+
+STEP 3  - MANDATORY QUALITY KEYWORDS (include ALL of these in your output prompt):
+Your generated prompt MUST include these quality instructions:
+- "Crisp, sharp, ultra-detailed illustration"
+- "Clean precise vector edges, no blur, no artifacts, no soft unfocused areas"
+- "High-resolution professional product-quality rendering"
+- "Vivid saturated colors with strong contrast"
+- "Every element rendered with precision and clarity"
+
+These quality keywords ensure the image AI generates SHARP, DETAILED output regardless of the reference image quality.
+
+THEN: ${fullInstruction}`;
+      }
 
       // Special handling for "Design Based on Previous Element" with photography
       if (projectType === 'previous-element' && params.style === 'photography' && params.photoStyle) {
-        const approachInstructions = {
-          'clipping-mask': `
+
+        // ===== LETTER-FILL DETECTION =====
+        // Check if this is a letter-shaped design (e.g., "TIJUANA letters with photos inside")
+        const instructionLower = (instruction || '').toLowerCase();
+        const isLetterDesign = /\b(letter.?fill|photo.?fill|each\s+letter\s+(shows?|contains?|filled|has)|inside\s+(of\s+)?(the\s+)?letters?|letters?\s+with\s+(photos?|images?|scenes?)|uneven\s+letters?|block\s+letters?|3d\s+letters?|chunky\s+letters?|letras?\s+(rellenas?|con\s+fotos?|con\s+imagenes?))\b/i.test(instructionLower)
+          || /\b(letters?|letras?)\b/i.test((params.previousElement || '').toLowerCase());
+
+        if (isLetterDesign && params.productType === 'magnet') {
+          // ===== LETTER-FILL MAGNET OVERRIDE =====
+          // This completely replaces the standard template for letter magnets
+          const destination = params.destination || 'DESTINATION';
+          const letters = destination.toUpperCase().split('');
+          const letterList = letters.map((l, i) => `- ${l}: [Iconic ${destination} scene #${i + 1}  - specific landmark, landscape, or cultural element]`).join('\n');
+
+          fullInstruction += `\n\n${'='.repeat(60)}
+[!] LETTER-FILL MAGNET OVERRIDE (THIS REPLACES ALL OTHER TEMPLATES)
+${'='.repeat(60)}
+
+You are creating a LETTER-FILL souvenir magnet. This is a SPECIALIZED product type.
+
+[X] DO NOT use the standard PROMPT_TEMPLATE.md composition framework.
+[X] DO NOT add 5-10 supporting elements, decoration layers, or ornamental borders.
+[X] DO NOT write a 200-350 word prompt. Keep it 80-150 words MAXIMUM.
+[X] DO NOT add heavy text integration (15-25% height banners).
+
+[OK] USE THIS SIMPLIFIED STRUCTURE INSTEAD:
+
+\`\`\`
+FORMAT: ${params.ratio || '2:1'}
+
+PRODUCT: Letter-fill souvenir magnet  - "${destination}"
+
+LETTER STYLE: Bold, chunky 3D letters with [natural wood / brushed metal / glossy acrylic] material texture. Letters are [slightly uneven in height for a handcrafted feel / uniform and clean / playfully tilted].
+
+LETTER ARRANGEMENT: "${destination}" spelled out in [horizontal row / slightly staggered heights / gentle arc], each letter acting as a photo window.
+
+PHOTO FILLS  - Each letter is a window/cutout showing a DIFFERENT ${destination} scene:
+${letterList}
+
+MATERIAL & FINISH: [Natural wood border with subtly burned/darkened edges / Brushed metal frame / Glossy acrylic with clean edges]. Each photo is vivid, high-resolution, fills the entire letter shape edge-to-edge.
+
+BACKGROUND: Clean white or transparent. The letters sit as a group  - no additional framing, badges, or borders around them.
+
+STYLE: Photorealistic product photography of a physical souvenir magnet. The letters should look like a REAL product you could buy in a gift shop  - tangible, three-dimensional, with realistic shadows and material textures.
+
+CREATE DESIGN
+\`\`\`
+
+CRITICAL REQUIREMENTS:
+- Each letter MUST show a DIFFERENT, SPECIFIC scene from ${destination} (not generic photos)
+- Choose iconic, recognizable landmarks and scenes that a tourist would associate with ${destination}
+- The photos inside letters must be vivid, sharp, and fill the ENTIRE letter shape
+- Letters should look like a real physical product with depth and materiality
+- Keep decoration MINIMAL (2-3/10 max)  - the beauty is in the photos and letter shapes
+- DO NOT add cartoon elements, decorative flowers, supporting animals, or text banners around the letters
+- The reference image shows EXACTLY the style: simple, clean, photo-filled letters as a standalone product`;
+
+        } else {
+          // ===== STANDARD PHOTOGRAPHY HANDLING (non-letter designs) =====
+          const approachInstructions = {
+            'clipping-mask': `
 MANDATORY APPROACH - CLIPPING MASK:
 Create a design where the photograph is placed INSIDE a regional iconic shape (animal silhouette, cultural object, landmark silhouette, etc.). The photo becomes the texture/fill of this shape.
 
@@ -365,7 +854,7 @@ SPECIFIC REQUIREMENTS:
 - The clipping mask shape should be bold and recognizable
 - Style: Bold cartoon-style outline for the shape, clean clipping mask effect`,
 
-          'decorative-frame': `
+            'decorative-frame': `
 MANDATORY APPROACH - DECORATIVE FRAME:
 Create a design where the photograph is centered in an ornamental frame/window, surrounded by illustrated cartoon-style regional elements.
 
@@ -377,9 +866,9 @@ SPECIFIC REQUIREMENTS:
 - Text should be integrated into the decorative border layer
 - The decorative elements should interact with the frame, not just float randomly
 - Create depth and layering between frame, photo, and decorative elements`
-        };
+          };
 
-        fullInstruction += `\n\nIMPORTANT: After reading the image(s), determine if they are REAL PHOTOGRAPHS (not illustrations/designs). If they are photographs, you MUST create an illustrated design using this approach:
+          fullInstruction += `\n\nIMPORTANT: After reading the image(s), determine if they are REAL PHOTOGRAPHS (not illustrations/designs). If they are photographs, you MUST create an illustrated design using this approach:
 
 ${approachInstructions[params.photoStyle]}
 
@@ -389,15 +878,80 @@ KEY REQUIREMENTS:
 - The photo should be ONE ELEMENT in a larger illustrated composition
 - DO NOT just add white text on top of the photo - that's lazy and unacceptable
 - Create a detailed, specific prompt that clearly describes how the photo integrates with illustrated elements`;
+        }
+      }
+    }
+
+    // Letter-fill detection for cases WITHOUT uploaded images (text-only request)
+    if (!projectImages.length && projectType === 'previous-element' && params.productType === 'magnet') {
+      const instructionLower = (instruction || '').toLowerCase();
+      const isLetterDesign = /\b(letter.?fill|photo.?fill|each\s+letter\s+(shows?|contains?|filled|has)|inside\s+(of\s+)?(the\s+)?letters?|letters?\s+with\s+(photos?|images?|scenes?)|uneven\s+letters?|block\s+letters?|3d\s+letters?|chunky\s+letters?|letras?\s+(rellenas?|con\s+fotos?|con\s+imagenes?))\b/i.test(instructionLower);
+
+      if (isLetterDesign) {
+        const destination = params.destination || 'DESTINATION';
+        const letters = destination.toUpperCase().split('');
+        const letterList = letters.map((l, i) => `- ${l}: [Iconic ${destination} scene #${i + 1}  - specific landmark, landscape, or cultural element]`).join('\n');
+
+        fullInstruction += `\n\n${'='.repeat(60)}
+[!] LETTER-FILL MAGNET OVERRIDE (THIS REPLACES ALL OTHER TEMPLATES)
+${'='.repeat(60)}
+
+You are creating a LETTER-FILL souvenir magnet. This is a SPECIALIZED product type.
+
+[X] DO NOT use the standard PROMPT_TEMPLATE.md composition framework.
+[X] DO NOT add 5-10 supporting elements, decoration layers, or ornamental borders.
+[X] DO NOT write a 200-350 word prompt. Keep it 80-150 words MAXIMUM.
+[X] DO NOT add heavy text integration (15-25% height banners).
+
+[OK] USE THIS SIMPLIFIED STRUCTURE INSTEAD:
+
+FORMAT: ${params.ratio || '2:1'}
+
+PRODUCT: Letter-fill souvenir magnet  - "${destination}"
+
+LETTER STYLE: Bold, chunky 3D letters with natural wood / metal / acrylic material. Letters are slightly uneven in height for a handcrafted feel.
+
+LETTER ARRANGEMENT: "${destination}" spelled horizontally, each letter acting as a photo window.
+
+PHOTO FILLS  - Each letter shows a DIFFERENT ${destination} scene:
+${letterList}
+
+MATERIAL & FINISH: Natural wood border with subtly burned/darkened edges. Vivid, high-resolution photos fill each letter edge-to-edge.
+
+BACKGROUND: Clean white or transparent. No additional framing or borders.
+
+STYLE: Photorealistic product shot of a physical souvenir magnet.
+
+CREATE DESIGN
+
+Keep decoration MINIMAL (2-3/10). Each letter must show a DIFFERENT, SPECIFIC, ICONIC scene from ${destination}.`;
+      }
+    }
+
+    // Determine working directory:
+    // If we have images, use the isolated temp directory (contains ONLY current images + docs)
+    // For variations WITH images: use temp dir WITHOUT CLAUDE.md (structured instructions are enough)
+    // For everything else: use project directory (no images = no contamination risk)
+    let effectiveCwd = projectPath;
+    if (tempDir) {
+      effectiveCwd = tempDir;
+      if (projectType === 'variations') {
+        // For variations, remove CLAUDE.md from temp dir so our structured instructions dominate
+        try { await fs.unlink(path.join(tempDir, 'CLAUDE.md')); } catch { /* ok */ }
+        console.log(`[+] VARIATIONS + IMAGES: Running from isolated temp dir (no CLAUDE.md interference)`);
+      } else {
+        console.log(`[+] Running from isolated temp dir (clean, no old images)`);
       }
     }
 
     // Use echo piping for instruction (Claude Code will read images from working directory)
-    const command = `echo ${JSON.stringify(fullInstruction)} | claude`;
+    // --allowedTools ensures Claude can read image files without asking for permission
+    const claudeFlags = projectImages.length > 0 ? '--allowedTools "Read,Glob"' : '';
+    const command = `echo ${JSON.stringify(fullInstruction)} | claude -p ${claudeFlags}`;
 
     // Spawn process using shell to allow piping
     const claude = spawn(command, [], {
-      cwd: projectPath,
+      cwd: effectiveCwd,
       shell: true,
       env: { ...process.env }
     });
@@ -405,7 +959,7 @@ KEY REQUIREMENTS:
     // Early warning timer (20 seconds)
     const warningTimer = setTimeout(() => {
       if (!hasReceivedOutput) {
-        console.log('⚠️  Still waiting for Claude Code response (20s elapsed)... This is normal for first request or large documentation.');
+        console.log('[!]  Still waiting for Claude Code response (20s elapsed)... This is normal for first request or large documentation.');
       }
     }, 20000);
 
@@ -418,12 +972,12 @@ KEY REQUIREMENTS:
       const timeSinceLastOutput = Date.now() - lastOutputTime;
 
       if (output && output.length > 50) {
-        console.log('⚠️  Timeout reached, returning partial output');
+        console.log('[!]  Timeout reached, returning partial output');
         resolve(output);
       } else if (hasReceivedOutput) {
         reject(new Error(`Claude Code stalled after ${Math.round(timeSinceLastOutput/1000)}s with no new output. The generation may be incomplete.`));
       } else {
-        reject(new Error('Claude Code timed out after 120 seconds with no output. Possible causes:\n• Large documentation files taking too long to read\n• Network latency to Anthropic API\n• Claude Code not properly installed\n\nTry: Simplify instruction, check internet connection, or restart the app.'));
+        reject(new Error('Claude Code timed out after 120 seconds with no output. Possible causes:\n- Large documentation files taking too long to read\n- Network latency to Anthropic API\n- Claude Code not properly installed\n\nTry: Simplify instruction, check internet connection, or restart the app.'));
       }
     }, 120000);
 
@@ -444,23 +998,24 @@ KEY REQUIREMENTS:
       console.error('stderr:', text);
     });
 
-    // Cleanup function to delete copied images
+    // Cleanup function: delete the entire temp directory (much more reliable than individual files)
     const cleanupImages = async () => {
-      for (const imgPath of projectImages) {
+      if (tempDir) {
         try {
-          await fs.unlink(imgPath);
-          console.log(`🗑️  Deleted temporary image: ${path.basename(imgPath)}`);
+          await fs.rm(tempDir, { recursive: true, force: true });
+          console.log(`[-] Deleted temp directory: ${path.basename(tempDir)}`);
         } catch (error) {
-          // Ignore cleanup errors
+          console.error(`[!] Cleanup warning: ${error.message}`);
         }
       }
+      // NOTE: Do NOT delete from uploads/  - those are the originals needed across variations
     };
 
     // Handle completion
     claude.on('close', async (code) => {
       clearTimeout(warningTimer); // Clean up warning timer
       clearTimeout(timeoutTimer); // Clean up timeout timer
-      console.log(`\n✓ Claude process completed (exit code: ${code})\n`);
+      console.log(`\n[OK] Claude process completed (exit code: ${code})\n`);
 
       // Clean up copied images
       await cleanupImages();
@@ -516,13 +1071,42 @@ KEY REQUIREMENTS:
   });
 }
 
+// Distribute styles across variations: returns an array of style names, one per variation
+function distributeStyles(styles, count) {
+  if (!styles || styles.length === 0) return new Array(count).fill('');
+  const result = [];
+  for (let i = 0; i < count; i++) {
+    result.push(styles[i % styles.length]);
+  }
+  return result;
+}
+
+// Diversity seeds  - each variation gets a different creative direction
+// IMPORTANT: All compositions MUST produce IRREGULAR silhouettes (no circles, rectangles, badges, frames)
+const DIVERSITY_ANGLES = [
+  'Use a HERO-CENTRIC composition: one dominant central element takes 60%+ of the space, with supporting details orbiting around it. The silhouette must be IRREGULAR  - shaped by the elements themselves (ribbons poking up, flowers extending at sides, etc.).',
+  'Use a PANORAMIC SCENE composition: spread elements across a wide landscape view, telling a story from left to right. The top edge should be JAGGED and VARIED (trees, buildings, character heads at different heights), the bottom edge shaped by terrain/flowers  - NOT a clean rectangle.',
+  'Use a DYNAMIC DIAGONAL composition: strong diagonal flow from one corner to the opposite, creating movement and energy. Elements break out of the frame at multiple points creating an IRREGULAR sticker-like silhouette.',
+  'Use a STACKED/LAYERED composition: elements piled and layered with the protagonist on top of a mound of flowers/nature, creating a PYRAMID-like organic shape. The silhouette is defined by the elements  - palm trees, ribbons, flowers all poking out at different angles.',
+  'Use a SCATTERED GARDEN composition: protagonist surrounded by a lush arrangement of flowers, animals, and nature that extends outward UNEVENLY in all directions, like a hand-picked bouquet  - wider on one side, taller on another.',
+  'Use an ASYMMETRIC SPLIT composition: protagonist positioned off-center with supporting elements weighted heavily on one side, creating an organic imbalanced silhouette like a sticker that is wider on one side than the other.',
+  'Use a CASCADING/WATERFALL composition: elements flowing downward from the protagonist, with flowers and nature spilling from top to bottom in an organic cascade, creating a silhouette that is wider at the bottom than the top.',
+  'Use a WRAPAROUND composition: supporting elements curve around the protagonist like a natural wreath but with IRREGULAR, BROKEN edges  - NOT a perfect circle. Flowers, vines, and birds extend outward asymmetrically at different points.'
+];
+
 // Generate multiple variations using Claude Code with streaming callback
 async function generateVariations(params, count, onVariationComplete) {
   const { projectType, instructions } = params;
   const variations = [];
 
+  // Distribute styles evenly across all variations
+  const styleAssignments = distributeStyles(params.styles, count);
+
   console.log(`\n${'*'.repeat(60)}`);
   console.log(`GENERATING ${count} VARIATION(S) USING CLAUDE CODE`);
+  if (params.styles && params.styles.length > 0) {
+    console.log(`STYLES: ${params.styles.join(', ')} -> distributed as: ${styleAssignments.join(', ')}`);
+  }
   console.log(`${'*'.repeat(60)}\n`);
 
   for (let i = 0; i < count; i++) {
@@ -531,24 +1115,34 @@ async function generateVariations(params, count, onVariationComplete) {
       let modifiedInstruction = instructions;
       const hasImages = params.images && params.images.length > 0;
 
-      // Always emphasize reference usage if images are provided
+      // Pick a diversity angle for this variation
+      const diversityAngle = DIVERSITY_ANGLES[i % DIVERSITY_ANGLES.length];
+
+      // Override the style for this specific variation
+      const variationStyle = styleAssignments[i];
+      if (variationStyle) {
+        params.style = variationStyle;
+      }
+
+      // When reference images are provided: keep same elements AND SAME STYLE, vary only arrangement
       if (hasImages && count === 1) {
-        modifiedInstruction = `${instructions}\n\nCRITICAL: You MUST create a variation based on the reference image(s) provided above. Keep the CORE ELEMENTS, CHARACTER, and OVERALL COMPOSITION from the reference design. Apply the modifications requested while maintaining the recognizable elements from the reference. DO NOT create a completely new design from scratch.`;
+        modifiedInstruction = `${instructions}\n\nREFERENCE IMAGE VARIATION RULES:\n- You MUST create a variation OF the reference image, not a new design from scratch.\n- STYLE MATCH IS MANDATORY: Your prompt MUST start with a detailed style description that replicates the EXACT rendering style, line work, shading, proportions, and color approach from the reference image. Be hyper-specific (e.g., "kawaii chibi-style with bold 2px black outlines, flat color fills, no gradients" NOT just "cartoon style").\n- Keep the SAME protagonist character with SAME clothing, accessories, and proportions.\n- Keep the SAME types of supporting elements (same flower species, same animals).\n- Keep the SAME color palette and saturation level.\n- CHANGE ONLY: pose, gesture, action, composition layout, or element arrangement.\n- The result should look like it was drawn by the SAME ARTIST as the reference.`;
       } else if (count > 1) {
-        // If images are provided, emphasize that this is a VARIATION of the reference
         if (hasImages) {
-          modifiedInstruction = `${instructions}\n\nCRITICAL: This is variation ${i + 1} of ${count}. You MUST create a variation based on the reference image(s) provided above. Keep the CORE ELEMENTS, CHARACTER, and OVERALL COMPOSITION from the reference, while applying the modifications requested. Be creative and innovative with your approach. DO NOT create a completely different design - this should be recognizably a variation of the reference with the modifications requested.`;
+          // Reference image + multiple variations: same elements AND STYLE, different arrangements
+          modifiedInstruction = `${instructions}\n\nREFERENCE IMAGE VARIATION ${i + 1} of ${count}:\n- STYLE MATCH IS MANDATORY: Start your prompt with a detailed description of the EXACT visual style from the reference (line work, shading, proportions, rendering). Be specific, not generic.\n- Keep the SAME protagonist with SAME clothing/accessories, SAME types of supporting elements, SAME color palette.\n- COMPOSITION CHANGE for variation ${i + 1}: ${diversityAngle}\n- The protagonist should have a DIFFERENT pose/gesture/action, but must be the SAME character with SAME style.\n- The result must look like it was drawn by the SAME ARTIST as the reference  - only the arrangement changes.`;
         } else {
-          modifiedInstruction = `${instructions}\n\nIMPORTANT: Create variation ${i + 1} of ${count}. Be completely innovative and creative with your approach. Make it DIFFERENT from other variations.`;
+          modifiedInstruction = `${instructions}\n\nIMPORTANT: Create variation ${i + 1} of ${count}.\n\nDIVERSITY REQUIREMENT (variation ${i + 1}): ${diversityAngle}\nThis must be COMPLETELY DIFFERENT from other variations. Use a different composition layout, different hero element treatment, different color mood, and different visual storytelling approach. Do NOT produce a slight tweak of the same design  - create a genuinely new concept.`;
         }
       }
 
-      console.log(`\n[${'='.repeat(10)} VARIATION ${i + 1}/${count} ${'='.repeat(10)}]\n`);
+      const styleLabel = variationStyle ? ` [${variationStyle.charAt(0).toUpperCase() + variationStyle.slice(1)}]` : '';
+      console.log(`\n[${'='.repeat(10)} VARIATION ${i + 1}/${count}${styleLabel} ${'='.repeat(10)}]\n`);
 
       // Use TURBO mode for ultra-fast generation, or standard mode for full documentation
       let output;
       if (params.turboMode) {
-        console.log(`⚡ Using TURBO mode - skipping documentation for maximum speed`);
+        console.log(`> Using TURBO mode - skipping documentation for maximum speed`);
         output = await invokeClaudeTurbo(modifiedInstruction, params);
       } else {
         // Invoke Claude Code - this will read all the project documentation
@@ -556,17 +1150,27 @@ async function generateVariations(params, count, onVariationComplete) {
       }
 
       // Append mandatory design rules to every prompt (Gemini must see these)
-      const designRules = `\n\n⚠️ CRITICAL DESIGN RULES — MANDATORY:\n- OUTER SHAPE: The design MUST have an IRREGULAR, ORGANIC, STICKER-LIKE silhouette. NEVER a square, rectangle, or any hard-edged geometric frame.\n- EDGES: Flowing, scalloped, wavy, or die-cut edges that follow the natural contours of the design elements.\n- BACKGROUND: Clean white or transparent background. The design floats freely as an irregular shape — NO borders, NO frames, NO rectangular containers.\n- If the design looks like it's inside a square or rectangular frame, it is WRONG. Redesign with organic flowing edges.`;
-      output += designRules;
+      // EXCEPTION: Letter-fill magnets have their own shape rules (letters are naturally rectangular)
+      const instructionCheck = (modifiedInstruction || '').toLowerCase();
+      const isLetterFillDesign = params.productType === 'magnet' && /\b(letter.?fill|photo.?fill|each\s+letter\s+(shows?|contains?|filled|has)|inside\s+(of\s+)?(the\s+)?letters?|uneven\s+letters?|block\s+letters?|3d\s+letters?|chunky\s+letters?|letras?\s+(rellenas?|con\s+fotos?|con\s+imagenes?))\b/i.test(instructionCheck);
+
+      if (isLetterFillDesign) {
+        const letterDesignRules = `\n\n[!] CRITICAL LETTER-FILL DESIGN RULES  - MANDATORY:\n- SHAPE: The overall shape is defined by the LETTERS themselves  - each letter is a bold 3D shape\n- LETTERS must look like REAL physical objects with depth, shadows, and material texture\n- Each letter is a PHOTO WINDOW  - filled edge-to-edge with a vivid, sharp photograph\n- NO cartoon elements, NO decorative flowers, NO supporting animals around the letters\n- NO text banners or additional labels  - the letters ARE the text\n- BACKGROUND: Clean white or transparent  - letters float as a group\n- PRODUCT FEEL: Must look like a real souvenir magnet you could buy in a gift shop\n- QUALITY: Crisp, professional, sharp  - like a product photo from an e-commerce site`;
+        output += letterDesignRules;
+      } else {
+        const designRules = `\n\n[!] CRITICAL DESIGN RULES  - MANDATORY (DO NOT IGNORE):\n- BANNED OUTER SHAPES: NEVER use a square, rectangle, perfect circle, oval, medallion, or any simple geometric shape as the overall silhouette. These are ALL wrong.\n- REQUIRED OUTER SHAPE: The design MUST have a COMPLEX, IRREGULAR, ASYMMETRIC silhouette  - like a hand-cut vinyl sticker. The outline should be shaped BY the design elements themselves.\n- HOW TO ACHIEVE THIS: Let elements break out and define the edge  - a palm tree extends upward creating a bump, waves flow along the bottom creating scallops, a character's arm pokes out one side, buildings create a jagged skyline. The silhouette should be UNIQUE to this specific design.\n- GOOD EXAMPLES: A travel design where the top edge is shaped by mountains and a palm tree, sides follow the curves of buildings and foliage, bottom has wave-shaped edges. Each design has a one-of-a-kind outline.\n- BAD EXAMPLES: Design crammed inside a circle. Design filling a square. Design inside a round badge/medallion. Design with uniform rounded edges all around (that's just a soft rectangle).\n- BACKGROUND: Clean white or transparent. The design floats freely  - NO borders, NO frames, NO containers of any kind.\n- SELF-CHECK: Trace the outer edge with your finger. If it's a recognizable geometric shape (circle, square, rectangle, oval), it is WRONG. The outline should be complex and impossible to describe with one word.`;
+        output += designRules;
+      }
 
       const variation = {
-        title: `Variation ${i + 1}`,
-        prompt: output,
-        index: i
+        title: variationStyle ? `Variation ${i + 1}  - ${variationStyle.charAt(0).toUpperCase() + variationStyle.slice(1)}` : `Variation ${i + 1}`,
+        prompt: sanitizePrompt(output),
+        index: i,
+        style: variationStyle || null
       };
 
       variations.push(variation);
-      console.log(`\n✅ Variation ${i + 1} completed successfully\n`);
+      console.log(`\n[OK] Variation ${i + 1} completed successfully\n`);
 
       // Call the callback immediately when this variation is ready
       if (onVariationComplete) {
@@ -574,10 +1178,10 @@ async function generateVariations(params, count, onVariationComplete) {
       }
 
     } catch (error) {
-      console.error(`❌ Error generating variation ${i + 1}:`, error.message);
+      console.error(`[X] Error generating variation ${i + 1}:`, error.message);
       const errorVariation = {
         title: `Variation ${i + 1} - Error`,
-        prompt: `❌ Error generating prompt:\n\n${error.message}\n\n**Troubleshooting:**\n- Make sure Claude Code is installed (npm install -g @anthropics/claude-code)\n- Ensure the 'claude' command is available in your terminal\n- Check that you're in the correct directory\n- Verify the project documentation exists in: ${PROJECTS[projectType]?.folder}`,
+        prompt: `[X] Error generating prompt:\n\n${error.message}\n\n**Troubleshooting:**\n- Make sure Claude Code is installed (npm install -g @anthropics/claude-code)\n- Ensure the 'claude' command is available in your terminal\n- Check that you're in the correct directory\n- Verify the project documentation exists in: ${PROJECTS[projectType]?.folder}`,
         index: i
       };
 
@@ -600,11 +1204,22 @@ async function generateVariations(params, count, onVariationComplete) {
 // API Endpoints
 
 // Server-Sent Events endpoint for streaming variations as they complete
-app.post('/api/generate-prompt-stream', upload.array('images'), async (req, res) => {
+app.post('/api/generate-prompt-stream', upload.fields([
+  { name: 'images', maxCount: 10 },
+  { name: 'styleReference', maxCount: 1 }
+]), async (req, res) => {
   try {
-    const { projectType, instructions, variationCount, destination, theme, level, decorationLevel, crazymeter, style, ratio, productType, includeShapeConstraints, photoStyle, turboMode } = req.body;
-    const images = req.files || [];
+    const { projectType, instructions, variationCount, destination, theme, level, decorationLevel, crazymeter, style, styles, ratio, productType, includeShapeConstraints, photoStyle, turboMode } = req.body;
+    const images = req.files?.['images'] || [];
+    const styleRefFiles = req.files?.['styleReference'] || [];
     const count = parseInt(variationCount) || 1;
+
+    // Parse multi-style selection
+    let parsedStyles = [];
+    try {
+      if (styles) parsedStyles = JSON.parse(styles);
+    } catch (e) { /* ignore parse errors, fall back to single style */ }
+    if (parsedStyles.length === 0 && style) parsedStyles = [style];
 
     if (!instructions || !instructions.trim()) {
       return res.status(400).json({
@@ -632,6 +1247,13 @@ app.post('/api/generate-prompt-stream', upload.array('images'), async (req, res)
       allImages.push(fixedPath);
     }
 
+    // Process style reference image if provided
+    let styleRefImagePath = null;
+    if (styleRefFiles.length > 0) {
+      styleRefImagePath = await fixImageExtension(styleRefFiles[0].path);
+      console.log(`[+] Style reference image: ${path.basename(styleRefImagePath)}`);
+    }
+
     const params = {
       projectType,
       instructions,
@@ -641,19 +1263,22 @@ app.post('/api/generate-prompt-stream', upload.array('images'), async (req, res)
       decorationLevel: decorationLevel || 8,
       crazymeter: crazymeter || null,
       style: style || '',
+      styles: parsedStyles,
       ratio: ratio || '1:1',
       productType: productType || 'bottle-opener',
       includeShapeConstraints: includeShapeConstraints === 'true',
       photoStyle: photoStyle || null,
       turboMode: turboMode === 'true',
-      images: allImages
+      images: allImages,
+      styleReferenceImage: styleRefImagePath
     };
 
-    console.log('\n📥 Received streaming request:', {
+    console.log('\n[+] Received streaming request:', {
       project: PROJECTS[projectType].name,
       variations: count,
       hasImages: images.length > 0,
       imageFiles: images.map(img => img.filename),
+      hasStyleRef: !!styleRefImagePath,
       level: params.level,
       decorationLevel: params.decorationLevel,
       crazymeter: params.crazymeter,
@@ -683,7 +1308,7 @@ app.post('/api/generate-prompt-stream', upload.array('images'), async (req, res)
     });
 
   } catch (error) {
-    console.error('❌ Error in streaming endpoint:', error);
+    console.error('[X] Error in streaming endpoint:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -716,7 +1341,7 @@ app.post('/api/analyze-instructions', upload.array('images'), async (req, res) =
       });
     }
 
-    console.log(`\n🤖 AI INSTRUCTIONS ANALYZER`);
+    console.log(`\nAI INSTRUCTIONS ANALYZER`);
     console.log(`Analyzing ${images.length} instruction image(s)...`);
 
     // Build the analysis prompt
@@ -726,7 +1351,7 @@ ANALYZE THE IMAGE(S) AND EXTRACT ALL OF THESE FIELDS:
 
 1. **instructions** - The main design request/instructions from the client. Combine all relevant text into clear design instructions. Be specific and detailed.
 
-2. **destination** - The location/place name if mentioned (e.g., "Trilobit Museo Restaurante", "Cancún", "Hermosillo", etc.)
+2. **destination** - The location/place name if mentioned (e.g., "Trilobit Museo Restaurante", "Cancun", "Hermosillo", etc.)
 
 3. **theme** - Any theme mentioned (e.g., "fossils", "beach", "desert", "tropical", "Christmas", "marine", etc.)
 
@@ -746,24 +1371,24 @@ ANALYZE THE IMAGE(S) AND EXTRACT ALL OF THESE FIELDS:
    Infer from context if mentioned. If not specified, vary your choice.
 
 7. **decorationLevel** - Decoration level (1-10). Infer from tone:
-   - "mucha decoración/elaborado/detallado" = 8-10
-   - "poca decoración/simple/limpio/minimalista" = 2-5
+   - "mucha decoracion/elaborado/detallado" = 8-10
+   - "poca decoracion/simple/limpio/minimalista" = 2-5
    - If not specified, choose a random value between 5-9
 
 8. **transformeterLevel** - Transformation level (1-10). Infer from requests:
-   - "cambios pequeños/similar/parecido" = 2-4
+   - "cambios pequenos/similar/parecido" = 2-4
    - "cambios moderados" = 5-6
    - "cambios grandes/diferente/nuevo" = 7-10
    - If not specified, choose a random value between 4-7
 
 9. **crazymeter** - Creativity level (1-10). Infer from tone:
-   - "tradicional/clásico/normal" = 2-4
-   - "creativo/único/original" = 5-7
+   - "tradicional/clasico/normal" = 2-4
+   - "creativo/unico/original" = 5-7
    - "muy creativo/loco/diferente/atrevido" = 8-10
    - If not specified, choose a random value between 4-8
 
 10. **variationCount** - Number of designs they want. Look for:
-   - "X modelos", "X diseños", "X opciones" = that number
+   - "X modelos", "X disenos", "X opciones" = that number
    - If not specified, default to 1
 
 11. **photoStyle** - ONLY if style is "photography":
@@ -804,7 +1429,7 @@ ${imageFilenames.map((f, i) => `${i + 1}. ${f}`).join('\n')}
 
 THEN: ${analyzePrompt}`;
 
-    const command = `echo ${JSON.stringify(fullPrompt)} | claude`;
+    const command = `echo ${JSON.stringify(fullPrompt)} | claude -p`;
 
     let output = '';
 
@@ -833,7 +1458,7 @@ THEN: ${analyzePrompt}`;
 
     claude.on('close', async (code) => {
       clearTimeout(timeoutTimer);
-      console.log(`🤖 Analysis completed (exit: ${code})`);
+      console.log(`Analysis completed (exit: ${code})`);
 
       // Clean up uploaded images (use fixed paths since they may have been renamed)
       for (const imgPath of fixedImages) {
@@ -847,7 +1472,7 @@ THEN: ${analyzePrompt}`;
         const jsonMatch = output.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const data = JSON.parse(jsonMatch[0]);
-          console.log('📋 Extracted data:', data);
+          console.log('Extracted data:', data);
           res.json({
             success: true,
             data: data
@@ -885,7 +1510,7 @@ THEN: ${analyzePrompt}`;
     });
 
   } catch (error) {
-    console.error('❌ Error in analyze endpoint:', error);
+    console.error('[X] Error in analyze endpoint:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -905,7 +1530,7 @@ app.post('/api/send-to-gemini', async (req, res) => {
       return res.status(400).json({ success: false, error: 'No prompt provided' });
     }
 
-    console.log(`\n🚀 Send to Gemini: prompt length=${prompt.length}, images=${images ? images.length : 0}`);
+    console.log(`\n[>] Send to Gemini: prompt length=${prompt.length}, images=${images ? images.length : 0}`);
 
     const timestamp = Date.now();
     const tempDir = path.join(os.tmpdir(), `gemini-${timestamp}`);
@@ -924,7 +1549,6 @@ app.post('/api/send-to-gemini', async (req, res) => {
             const filePath = path.join(tempDir, `ref-${i}.${ext}`);
             await fs.writeFile(filePath, buffer);
             imagePaths.push(filePath);
-            console.log(`  📷 Image ${i}: ${filePath}`);
           }
         }
       }
@@ -932,33 +1556,35 @@ app.post('/api/send-to-gemini', async (req, res) => {
 
     // Write prompt to temp file
     const promptFile = path.join(tempDir, 'prompt.txt');
-    await fs.writeFile(promptFile, prompt, 'utf8');
+    await fs.writeFile(promptFile, sanitizePrompt(prompt), 'utf8');
 
     const platform = process.platform;
 
     if (platform === 'win32') {
       // ===== WINDOWS: PowerShell automation =====
-      // Build image clipboard steps for PowerShell
+      // Build image clipboard steps for PowerShell - unique temp filenames prevent "already uploaded"
       let imageSteps = '';
       for (let i = 0; i < imagePaths.length; i++) {
-        const imgPath = imagePaths[i].replace(/\\/g, '\\\\').replace(/'/g, "''");
+        const imgPath = imagePaths[i];
+        const ext = path.extname(imgPath) || '.png';
+        const uniqueTempName = path.join(tempDir, `design-ref-${timestamp}-${i}${ext}`);
+
         imageSteps += `
-# Paste image ${i + 1}
-$chrome = Get-Process chrome -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowTitle -ne ''}
-if ($chrome) { [void][System.Runtime.InteropServices.Marshal] }
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Windows.Forms
-$img = [System.Drawing.Image]::FromFile('${imgPath}')
+# Copy to unique temp filename to prevent Gemini "already uploaded" error
+Copy-Item -Path '${imgPath.replace(/'/g, "''")}' -Destination '${uniqueTempName.replace(/'/g, "''")}'
+# Load and paste image ${i + 1}
+$img = [System.Drawing.Image]::FromFile('${uniqueTempName.replace(/'/g, "''")}')
 [System.Windows.Forms.Clipboard]::SetImage($img)
 $img.Dispose()
-Start-Sleep -Milliseconds 300
+Start-Sleep -Milliseconds 500
 [System.Windows.Forms.SendKeys]::SendWait('^v')
-Start-Sleep -Milliseconds 1500
+Start-Sleep -Milliseconds 2500
 `;
       }
 
       const psScript = `
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 
 # Open Gemini in Chrome
 Start-Process "chrome.exe" "https://gemini.google.com/app"
@@ -969,15 +1595,18 @@ ${imageSteps}
 # Copy prompt text to clipboard and paste
 $promptText = Get-Content -Path '${promptFile.replace(/\\/g, '\\\\').replace(/'/g, "''")}' -Raw
 [System.Windows.Forms.Clipboard]::SetText($promptText)
-Start-Sleep -Milliseconds 300
-[System.Windows.Forms.SendKeys]::SendWait('^v')
 Start-Sleep -Milliseconds 500
+[System.Windows.Forms.SendKeys]::SendWait('^v')
+Start-Sleep -Milliseconds 800
+
+# Auto-submit: press Enter
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 `;
 
       const scriptFile = path.join(tempDir, 'automate.ps1');
       await fs.writeFile(scriptFile, psScript, 'utf8');
 
-      console.log('  📝 Executing Gemini automation (PowerShell)...');
+      console.log('  Executing Gemini automation (PowerShell)...');
 
       exec(`powershell -ExecutionPolicy Bypass -File "${scriptFile}"`, { timeout: 60000 }, (error, stdout, stderr) => {
         // Cleanup after delay
@@ -986,116 +1615,102 @@ Start-Sleep -Milliseconds 500
         }, 60000);
 
         if (error) {
-          console.error('  ❌ PowerShell error:', stderr || error.message);
+          console.error('  [X] PowerShell error:', stderr || error.message);
         } else {
-          console.log('  ✅ Gemini automation completed');
+          console.log('  [OK] Gemini automation completed');
         }
       });
 
     } else if (platform === 'darwin') {
-      // ===== macOS: AppleScript automation =====
-      // Write a Python helper script to copy image to clipboard (reliable macOS approach)
+      // ===== macOS: Fast AppleScript automation with polling =====
+      // Python clipboard helper - puts image as a NAMED FILE on pasteboard
+      // Each image gets a unique name so Gemini doesn't reject duplicates
       const clipboardHelperPath = path.join(tempDir, 'clipboard_image.py');
-      const clipboardHelper = `#!/usr/bin/env python3
-import sys
-from AppKit import NSImage, NSPasteboard
+      await fs.writeFile(clipboardHelperPath, `#!/usr/bin/env python3
+import sys, os, shutil, tempfile
+from AppKit import NSPasteboard, NSURL
 
-image_path = sys.argv[1]
-image = NSImage.alloc().initWithContentsOfFile_(image_path)
-if not image:
-    print(f"Failed to load image: {image_path}", file=sys.stderr)
-    sys.exit(1)
+src = sys.argv[1]
+unique_name = sys.argv[2] if len(sys.argv) > 2 else os.path.basename(src)
 
+# Copy to a temp file with the unique name so Gemini sees a distinct filename
+tmp_dir = tempfile.mkdtemp()
+dest = os.path.join(tmp_dir, unique_name)
+shutil.copy2(src, dest)
+
+file_url = NSURL.fileURLWithPath_(dest)
 pb = NSPasteboard.generalPasteboard()
 pb.clearContents()
-pb.writeObjects_([image])
-print("OK")
-`;
-      await fs.writeFile(clipboardHelperPath, clipboardHelper, 'utf8');
+pb.writeObjects_([file_url])
+`, 'utf8');
 
-      // Build image paste steps
+      // Build fast image paste steps - each image gets a unique filename
       let imageSteps = '';
-      for (let i = 0; i < imagePaths.length; i++) {
-        const imgPath = imagePaths[i];
+      for (let idx = 0; idx < imagePaths.length; idx++) {
+        const imgPath = imagePaths[idx];
+        const ext = path.extname(imgPath) || '.png';
+        const uniqueName = `design-ref-${timestamp}-${idx}${ext}`;
         imageSteps += `
--- Paste image ${i + 1}
-tell application "Google Chrome"
-  execute active tab of front window javascript "var el = document.querySelector('div[contenteditable=true][role=textbox]'); if(el){el.focus(); el.click();} 'ok'"
-end tell
-do shell script "python3 " & quoted form of "${clipboardHelperPath}" & " " & quoted form of "${imgPath}"
-delay 0.3
-tell application "System Events"
-  keystroke "v" using command down
-end tell
-delay 1.5
+  do shell script "python3 " & quoted form of "${clipboardHelperPath}" & " " & quoted form of "${imgPath}" & " " & quoted form of "${uniqueName}"
+  execute active tab of front window javascript "var el=document.querySelector('div[contenteditable=true][role=textbox]');if(el){el.focus();el.click();} 'ok'"
+  tell application "System Events" to keystroke "v" using command down
+  -- Wait for Gemini to process the image (poll for image chip or attachment)
+  delay 0.3
+  repeat 15 times
+    set hasImg to (execute active tab of front window javascript "document.querySelectorAll('img[src*=blob],div[data-image-id],div.image-chip,.attachment-chip').length")
+    if hasImg is not "0" then exit repeat
+    delay 0.2
+  end repeat
+  delay 0.3
+  -- Dismiss any duplicate-name error dialog if it appeared
+  execute active tab of front window javascript "var d=document.querySelector('button[aria-label=Dismiss],button[aria-label=Close],.error-dismiss');if(d)d.click();"
 `;
       }
 
+      // FAST AppleScript: tight polling, minimal delays, JS text injection
       const appleScript = `
--- Open new Gemini tab
 tell application "Google Chrome"
   activate
-  tell front window
-    make new tab with properties {URL:"https://gemini.google.com/app"}
-  end tell
-  delay 1.5
-  repeat 30 times
+  tell front window to make new tab with properties {URL:"https://gemini.google.com/app"}
+  -- Fast poll: page load
+  repeat 40 times
     if not (loading of active tab of front window) then exit repeat
-    delay 0.3
+    delay 0.15
   end repeat
-  repeat 20 times
-    set editorReady to execute active tab of front window javascript "document.querySelector('div[contenteditable=true][role=textbox]') ? 'ready' : 'waiting'"
-    if editorReady is "ready" then exit repeat
-    delay 0.5
+  -- Fast poll: editor ready
+  repeat 30 times
+    if (execute active tab of front window javascript "document.querySelector('div[contenteditable=true][role=textbox]')?'1':'0'") is "1" then exit repeat
+    delay 0.15
   end repeat
-  delay 0.5
-  execute active tab of front window javascript "var el = document.querySelector('div[contenteditable=true][role=textbox]'); if(el){el.focus(); el.click();} 'ok'"
-end tell
-
--- STEP 1: Paste images first (if any)
+  delay 0.2
+  -- Focus editor
+  execute active tab of front window javascript "var el=document.querySelector('div[contenteditable=true][role=textbox]');if(el){el.focus();el.click();} 'ok'"
 ${imageSteps}
-
--- STEP 2: Focus the text input again
-tell application "Google Chrome"
-  execute active tab of front window javascript "var el = document.querySelector('div[contenteditable=true][role=textbox]'); if(el){el.focus(); el.click();} 'ok'"
+  -- Paste text via clipboard (most reliable for Gemini)
+  execute active tab of front window javascript "var el=document.querySelector('div[contenteditable=true][role=textbox]');if(el){el.focus();el.click();} 'ok'"
 end tell
-delay 0.2
-
--- STEP 3: Paste prompt text last
 do shell script "cat " & quoted form of "${promptFile}" & " | pbcopy"
-delay 0.2
+tell application "System Events" to keystroke "v" using command down
+-- Wait for paste to register then press Enter to submit
+delay 0.8
 tell application "System Events"
-  tell process "Google Chrome"
-    set frontmost to true
-  end tell
-  delay 0.3
-  keystroke "v" using command down
+  key code 36
 end tell
-delay 0.5
-
 return "done"
 `;
 
       const scriptFile = path.join(tempDir, 'automate.scpt');
       await fs.writeFile(scriptFile, appleScript, 'utf8');
 
-      console.log('  📝 Executing Gemini automation (AppleScript)...');
-
-      exec(`osascript "${scriptFile}"`, { timeout: 60000 }, (error, stdout, stderr) => {
-        setTimeout(() => {
-          fs.rm(tempDir, { recursive: true }).catch(() => {});
-        }, 60000);
-
-        if (error) {
-          console.error('  ❌ AppleScript error:', stderr || error.message);
-        } else {
-          console.log('  ✅ Gemini automation completed');
-        }
+      exec(`osascript "${scriptFile}"`, { timeout: 30000 }, (error) => {
+        setTimeout(() => { fs.rm(tempDir, { recursive: true }).catch(() => {}); }, 30000);
+        if (error) console.error('  [X] AppleScript error:', error.message);
+        else console.log('  [OK] Gemini automation completed');
       });
 
     } else {
-      // ===== Linux: xdotool + xclip approach =====
-      console.log('  ⚠️ Linux automation not fully supported - opening Gemini and copying to clipboard');
+      // ===== Linux: xdg-open + xclip approach =====
+      console.log('  [!] Linux automation not fully supported - opening Gemini and copying to clipboard');
       exec(`xdg-open "https://gemini.google.com/app"`, () => {});
       exec(`cat "${promptFile}" | xclip -selection clipboard`, () => {});
     }
@@ -1103,7 +1718,241 @@ return "done"
     res.json({ success: true, message: 'Sending to Gemini...', hasImages: imagePaths.length > 0 });
 
   } catch (error) {
-    console.error('❌ Send to Gemini error:', error);
+    console.error('[X] Send to Gemini error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ═══ BULK SEND TO GEMINI (pre-open all tabs, then rapid-paste) ═══
+app.post('/api/send-all-to-gemini', async (req, res) => {
+  try {
+    const { prompts, images } = req.body;
+
+    if (!prompts || !Array.isArray(prompts) || prompts.length === 0) {
+      return res.status(400).json({ success: false, error: 'No prompts provided' });
+    }
+
+    console.log(`\n[>] BULK Send to Gemini: ${prompts.length} prompts, images=${images ? images.length : 0}`);
+
+    const timestamp = Date.now();
+    const tempDir = path.join(os.tmpdir(), `gemini-bulk-${timestamp}`);
+    await fs.mkdir(tempDir, { recursive: true });
+
+    // Save images as temp files
+    const imagePaths = [];
+    if (images && images.length > 0) {
+      for (let i = 0; i < images.length; i++) {
+        const img = images[i];
+        if (img.dataUrl) {
+          const matches = img.dataUrl.match(/^data:image\/(\w+);base64,(.+)$/s);
+          if (matches) {
+            const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+            const buffer = Buffer.from(matches[2], 'base64');
+            const filePath = path.join(tempDir, `ref-${i}.${ext}`);
+            await fs.writeFile(filePath, buffer);
+            imagePaths.push(filePath);
+          }
+        }
+      }
+    }
+
+    // Write each prompt to its own temp file
+    const promptFiles = [];
+    for (let i = 0; i < prompts.length; i++) {
+      const promptFile = path.join(tempDir, `prompt-${i}.txt`);
+      await fs.writeFile(promptFile, sanitizePrompt(prompts[i]), 'utf8');
+      promptFiles.push(promptFile);
+    }
+
+    const platform = process.platform;
+    const tabCount = prompts.length;
+
+    if (platform === 'win32') {
+      // ===== WINDOWS BULK: PowerShell - open tabs sequentially, paste in each =====
+      let psScript = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+`;
+      for (let i = 0; i < tabCount; i++) {
+        const promptFile = promptFiles[i];
+
+        // Image paste steps for this tab
+        let imgSteps = '';
+        for (let imgIdx = 0; imgIdx < imagePaths.length; imgIdx++) {
+          const imgPath = imagePaths[imgIdx];
+          const ext = path.extname(imgPath) || '.png';
+          const uniqueTempName = path.join(tempDir, `design-ref-tab${i}-${timestamp}-${imgIdx}${ext}`);
+          imgSteps += `
+# Copy image to unique temp name for tab ${i + 1}
+Copy-Item -Path '${imgPath.replace(/'/g, "''")}' -Destination '${uniqueTempName.replace(/'/g, "''")}'
+$img = [System.Drawing.Image]::FromFile('${uniqueTempName.replace(/'/g, "''")}')
+[System.Windows.Forms.Clipboard]::SetImage($img)
+$img.Dispose()
+Start-Sleep -Milliseconds 500
+[System.Windows.Forms.SendKeys]::SendWait('^v')
+Start-Sleep -Milliseconds 2500
+`;
+        }
+
+        psScript += `
+# === TAB ${i + 1}/${tabCount} ===
+Start-Process "chrome.exe" "https://gemini.google.com/app"
+Start-Sleep -Seconds 4
+
+${imgSteps}
+
+# Paste prompt text
+$promptText${i} = Get-Content -Path '${promptFile.replace(/\\/g, '\\\\').replace(/'/g, "''")}' -Raw
+[System.Windows.Forms.Clipboard]::SetText($promptText${i})
+Start-Sleep -Milliseconds 500
+[System.Windows.Forms.SendKeys]::SendWait('^v')
+Start-Sleep -Milliseconds 800
+
+# Auto-submit: press Enter
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+Start-Sleep -Seconds 2
+`;
+      }
+
+      const scriptFile = path.join(tempDir, 'bulk_automate.ps1');
+      await fs.writeFile(scriptFile, psScript, 'utf8');
+
+      console.log(`  Executing BULK Gemini automation (PowerShell, ${tabCount} tabs)...`);
+
+      exec(`powershell -ExecutionPolicy Bypass -File "${scriptFile}"`, { timeout: 120000 }, (error, stdout, stderr) => {
+        setTimeout(() => { fs.rm(tempDir, { recursive: true }).catch(() => {}); }, 60000);
+        if (error) console.error('  [X] Bulk PowerShell error:', stderr || error.message);
+        else console.log(`  [OK] Bulk Gemini done (${tabCount} tabs)`);
+      });
+
+    } else if (platform === 'darwin') {
+      // ===== macOS BULK: Fast AppleScript - open all tabs, then rapid paste =====
+      // Python clipboard helper - named file on pasteboard (unique names prevent Gemini duplicates)
+      const clipboardHelperPath = path.join(tempDir, 'clipboard_image.py');
+      await fs.writeFile(clipboardHelperPath, `#!/usr/bin/env python3
+import sys, os, shutil, tempfile
+from AppKit import NSPasteboard, NSURL
+
+src = sys.argv[1]
+unique_name = sys.argv[2] if len(sys.argv) > 2 else os.path.basename(src)
+
+tmp_dir = tempfile.mkdtemp()
+dest = os.path.join(tmp_dir, unique_name)
+shutil.copy2(src, dest)
+
+file_url = NSURL.fileURLWithPath_(dest)
+pb = NSPasteboard.generalPasteboard()
+pb.clearContents()
+pb.writeObjects_([file_url])
+`, 'utf8');
+
+      // ═══ FAST BULK SCRIPT: Open all tabs -> parallel load -> rapid paste ═══
+      let script = `
+tell application "Google Chrome"
+  activate
+  set w to front window
+  -- Open ALL tabs at once (no delays between)
+`;
+      for (let i = 0; i < tabCount; i++) {
+        script += `  tell w to make new tab with properties {URL:"https://gemini.google.com/app"}\n`;
+      }
+      script += `
+  -- Fast parallel wait: poll ALL tabs until loaded
+  set tabTotal to count of tabs of w
+  repeat 50 times
+    set allDone to true
+    repeat with i from (tabTotal - ${tabCount - 1}) to tabTotal
+      if (loading of tab i of w) then set allDone to false
+    end repeat
+    if allDone then exit repeat
+    delay 0.15
+  end repeat
+  -- Quick editor init wait
+  delay 0.5
+end tell
+`;
+
+      // For each tab: switch + paste images + paste text (tight timing)
+      for (let i = 0; i < tabCount; i++) {
+        const promptFile = promptFiles[i];
+
+        // Image paste steps for this tab - each image gets unique name per tab
+        let imgSteps = '';
+        for (let imgIdx = 0; imgIdx < imagePaths.length; imgIdx++) {
+          const imgPath = imagePaths[imgIdx];
+          const ext = path.extname(imgPath) || '.png';
+          const uniqueName = `design-ref-tab${i}-${timestamp}-${imgIdx}${ext}`;
+          imgSteps += `
+    do shell script "python3 " & quoted form of "${clipboardHelperPath}" & " " & quoted form of "${imgPath}" & " " & quoted form of "${uniqueName}"
+    execute active tab of w javascript "var el=document.querySelector('div[contenteditable=true][role=textbox]');if(el){el.focus();el.click();} 'ok'"
+    tell application "System Events" to keystroke "v" using command down
+    delay 0.3
+    repeat 15 times
+      set hasImg to (execute active tab of w javascript "document.querySelectorAll('img[src*=blob],div[data-image-id],div.image-chip,.attachment-chip').length")
+      if hasImg is not "0" then exit repeat
+      delay 0.2
+    end repeat
+    delay 0.2
+    execute active tab of w javascript "var d=document.querySelector('button[aria-label=Dismiss],button[aria-label=Close],.error-dismiss');if(d)d.click();"
+`;
+        }
+
+        script += `
+-- TAB ${i + 1}/${tabCount}
+tell application "Google Chrome"
+  set w to front window
+  set tabTotal to count of tabs of w
+  set active tab index of w to (tabTotal - ${tabCount - 1 - i})
+  -- Fast poll editor ready
+  repeat 20 times
+    if (execute active tab of w javascript "document.querySelector('div[contenteditable=true][role=textbox]')?'1':'0'") is "1" then exit repeat
+    delay 0.1
+  end repeat
+  execute active tab of w javascript "var el=document.querySelector('div[contenteditable=true][role=textbox]');if(el){el.focus();el.click();} 'ok'"
+${imgSteps}
+  execute active tab of w javascript "var el=document.querySelector('div[contenteditable=true][role=textbox]');if(el){el.focus();el.click();} 'ok'"
+end tell
+do shell script "cat " & quoted form of "${promptFile}" & " | pbcopy"
+tell application "System Events" to keystroke "v" using command down
+-- Wait for paste then press Enter to submit
+delay 0.8
+tell application "System Events"
+  key code 36
+end tell
+delay 0.3
+`;
+      }
+
+      script += `\nreturn "done"\n`;
+
+      const scriptFile = path.join(tempDir, 'bulk_automate.scpt');
+      await fs.writeFile(scriptFile, script, 'utf8');
+
+      console.log(`  Executing FAST bulk Gemini automation (${tabCount} tabs)...`);
+
+      exec(`osascript "${scriptFile}"`, { timeout: 90000 }, (error) => {
+        setTimeout(() => { fs.rm(tempDir, { recursive: true }).catch(() => {}); }, 30000);
+        if (error) console.error('  [X] Bulk error:', error.message);
+        else console.log(`  [OK] Bulk Gemini done (${tabCount} tabs)`);
+      });
+
+    } else {
+      // ===== Linux BULK: open multiple tabs, copy last prompt to clipboard =====
+      console.log('  [!] Linux bulk automation not fully supported - opening tabs and copying last prompt');
+      for (let i = 0; i < tabCount; i++) {
+        exec(`xdg-open "https://gemini.google.com/app"`, () => {});
+      }
+      // Copy the last prompt to clipboard as a starting point
+      if (promptFiles.length > 0) {
+        exec(`cat "${promptFiles[promptFiles.length - 1]}" | xclip -selection clipboard`, () => {});
+      }
+    }
+
+    res.json({ success: true, message: `Opening ${tabCount} Gemini tabs...`, count: tabCount });
+
+  } catch (error) {
+    console.error('[X] Bulk Send to Gemini error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1126,10 +1975,10 @@ function openChrome(url) {
 
   exec(command, (error) => {
     if (error) {
-      console.log(`⚠️  Could not auto-open Chrome: ${error.message}`);
-      console.log(`💡 Please manually open: ${url}`);
+      console.log(`[!]  Could not auto-open Chrome: ${error.message}`);
+      console.log(`Please manually open: ${url}`);
     } else {
-      console.log(`🌐 Opened Chrome at ${url}`);
+      console.log(`Opened Chrome at ${url}`);
     }
   });
 }
@@ -1140,18 +1989,19 @@ app.listen(PORT, () => {
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
 ║                                                            ║
-║        🎨 Design Prompt Generator - RUNNING! 🎨           ║
+║        Design Prompt Generator - RUNNING!                  ║
 ║                                                            ║
 ║        Open your browser and go to:                        ║
 ║                                                            ║
-║        👉  http://localhost:${PORT}                          ║
+║        >>  http://localhost:${PORT}                          ║
 ║                                                            ║
-║        ⚡ Now powered by Claude Code!                      ║
-║        📚 Reads your project documentation automatically   ║
+║        Now powered by Claude Code!                         ║
+║        Reads your project documentation automatically      ║
+║        Cross-platform: Windows / macOS / Linux             ║
 ║                                                            ║
 ╚════════════════════════════════════════════════════════════╝
   `);
-  console.log('\n✅ Server ready! Waiting for requests...\n');
+  console.log('\n[OK] Server ready! Waiting for requests...\n');
 
   // Auto-open Chrome after a brief delay to ensure server is ready
   setTimeout(() => openChrome(url), 1000);
