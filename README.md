@@ -142,8 +142,12 @@ Detailed documentation available in `design-prompt-app/`:
 - **Windows 10 or 11**
 - **Node.js** (Download from: https://nodejs.org)
 - **Git** (Download from: https://git-scm.com/download/win)
+- **Claude CLI** (Required for AI prompt generation)
+  1. Install: `npm install -g @anthropic-ai/claude-code`
+  2. Authenticate: `claude` (follow the login prompts)
+  3. Verify it works: `claude -p "hello"`
 
-First time? Install Node.js and Git, then run `SETUP.bat`
+First time? Install Node.js, Git, and Claude CLI, then run `SETUP.bat`
 
 ---
 
