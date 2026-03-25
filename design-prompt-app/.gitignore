@@ -2,3 +2,7 @@ node_modules/
 uploads/
 *.log
 .DS_Store
+tmp/
+tmp-ref/
+.server.pid
+.reboot.lock

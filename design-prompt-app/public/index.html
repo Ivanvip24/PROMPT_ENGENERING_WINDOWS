@@ -212,9 +212,35 @@
             gap: 16px;
         }
         .form-grid .field-instructions { grid-column: 1; grid-row: 1 / 3; }
-        .form-grid .field-destino { grid-column: 2; grid-row: 1; }
+        .form-grid .field-destino { display: none; }
         .form-grid .field-theme { grid-column: 2; grid-row: 2; }
+        .form-grid .field-keys { grid-column: 2; grid-row: 1 / 4; align-self: start; }
         .form-grid .field-element { grid-column: 2; grid-row: 2; }
+        .textarea-wrapper {
+            position: relative;
+        }
+        .textarea-backdrop {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            padding: 16px;
+            border: 2px solid transparent;
+            border-radius: var(--radius-md);
+            font-family: var(--font-body);
+            font-size: 14px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow: hidden;
+            pointer-events: none;
+            color: transparent;
+            background: var(--bg-primary);
+        }
+        .textarea-backdrop .key-highlight {
+            background: rgba(231,42,136,0.18);
+            color: transparent;
+            border-radius: 3px;
+            border-bottom: 2px solid var(--rosa);
+        }
         .form-textarea {
             width: 100%;
             min-height: 120px;
@@ -226,7 +252,8 @@
             line-height: 1.6;
             resize: vertical;
             transition: border-color 0.2s ease, box-shadow 0.2s ease;
-            background: var(--bg-primary);
+            background: transparent;
+            position: relative;
         }
         .form-textarea:focus {
             outline: none;
@@ -1080,6 +1107,193 @@
         }
         .btn-clear-ai:hover { border-color: var(--rojo); color: var(--rojo); }
 
+        /* ═══ KEYS (VARIABLES) SECTION ═══ */
+        .keys-inline-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        .keys-header-left { display: flex; align-items: center; gap: 8px; }
+        .keys-count-badge {
+            padding: 2px 10px;
+            background: var(--rosa-light);
+            border-radius: var(--radius-full);
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--rosa);
+        }
+        .keys-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+        .key-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: var(--bg-primary);
+            border: 2px solid var(--border-light);
+            border-radius: var(--radius-md);
+            transition: border-color 0.2s ease;
+        }
+        .key-row:focus-within {
+            border-color: var(--rosa);
+            box-shadow: 0 0 0 4px rgba(231,42,136,0.1);
+        }
+        .key-name-input {
+            width: 140px;
+            min-width: 100px;
+            padding: 6px 10px;
+            border: none;
+            background: transparent;
+            font-family: var(--font-body);
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: var(--rosa);
+            letter-spacing: 0.5px;
+        }
+        .key-name-input::placeholder { color: var(--text-tertiary); text-transform: none; font-weight: 400; }
+        .key-name-input:focus { outline: none; }
+        .key-equals { color: var(--text-tertiary); font-weight: 700; font-size: 14px; flex-shrink: 0; }
+        .key-values-input {
+            flex: 1;
+            padding: 6px 10px;
+            border: none;
+            background: transparent;
+            font-family: var(--font-body);
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+        .key-values-input::placeholder { color: var(--text-tertiary); }
+        .key-values-input:focus { outline: none; }
+        .key-permute-toggle {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: background 0.2s ease;
+            flex-shrink: 0;
+        }
+        .key-permute-toggle:hover { background: var(--bg-tertiary); }
+        .key-permute-dot {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            display: block;
+            transition: background 0.3s ease;
+        }
+        .key-permute-dot.permute-active {
+            background: var(--verde);
+            animation: permutePulse 1.5s ease-in-out infinite;
+            box-shadow: 0 0 6px rgba(138,183,59,0.5);
+        }
+        .key-permute-dot.permute-inactive {
+            background: var(--rojo);
+            animation: none;
+            box-shadow: none;
+            opacity: 0.7;
+        }
+        @keyframes permutePulse {
+            0%, 100% { transform: scale(1); opacity: 1; box-shadow: 0 0 6px rgba(138,183,59,0.5); }
+            50% { transform: scale(1.3); opacity: 0.8; box-shadow: 0 0 14px rgba(138,183,59,0.7); }
+        }
+        .key-delete-btn {
+            width: 28px;
+            height: 28px;
+            border: none;
+            background: transparent;
+            color: var(--text-tertiary);
+            font-size: 18px;
+            cursor: pointer;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+        }
+        .key-delete-btn:hover { background: rgba(239,68,68,0.1); color: var(--rojo); }
+        .keys-add-btn {
+            width: 100%;
+            padding: 10px;
+            border: 2px dashed var(--border-medium);
+            border-radius: var(--radius-md);
+            background: transparent;
+            font-family: var(--font-body);
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-tertiary);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .keys-add-btn:hover {
+            border-color: var(--rosa);
+            color: var(--rosa);
+            background: var(--rosa-light);
+        }
+        .keys-permutation-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+            padding: 8px 14px;
+            background: var(--verde-light);
+            border-radius: var(--radius-sm);
+            border-left: 4px solid var(--verde);
+            font-size: 12px;
+            color: #558b2f;
+            font-weight: 600;
+        }
+
+        /* ═══ RANDOM BUTTON ═══ */
+        .random-btn {
+            padding: 10px 22px;
+            border: none;
+            border-radius: var(--radius-full);
+            background: linear-gradient(135deg, #e72a88, #f39223, #8ab73b, #09adc2, #e72a88);
+            background-size: 300% 300%;
+            animation: randomShimmer 4s ease infinite;
+            color: white;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            text-shadow: 0 0 6px rgba(255,255,255,0.3);
+            box-shadow:
+                0 0 10px rgba(231,42,136,0.4),
+                0 0 25px rgba(243,146,35,0.2),
+                inset 0 1px 1px rgba(255,255,255,0.3);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+        .random-btn:hover {
+            box-shadow:
+                0 0 14px rgba(231,42,136,0.6),
+                0 0 35px rgba(243,146,35,0.4),
+                0 0 55px rgba(138,183,59,0.2),
+                inset 0 1px 2px rgba(255,255,255,0.4);
+            transform: scale(1.05);
+        }
+        .random-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .random-btn .spin-icon {
+            animation: spin 1s linear infinite;
+        }
+        @keyframes randomShimmer {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
         /* ═══ ACTIONS ROW ═══ */
         .actions-row {
             display: flex;
@@ -1570,8 +1784,9 @@
             .form-card { padding: 20px 16px; }
             .form-grid { grid-template-columns: 1fr; }
             .form-grid .field-instructions { grid-row: auto; }
-            .form-grid .field-destino { grid-column: 1; grid-row: auto; }
+            .form-grid .field-destino { display: none; }
             .form-grid .field-theme { grid-column: 1; grid-row: auto; }
+            .form-grid .field-keys { grid-column: 1; grid-row: auto; }
             .form-grid .field-element { grid-column: 1; grid-row: auto; }
             .image-upload-body { grid-template-columns: 1fr; }
             .controls-row { grid-template-columns: 1fr; }
@@ -1698,25 +1913,51 @@
             <div class="form-grid">
                 <div class="form-field field-instructions">
                     <label class="form-label" data-translate="instructionsCard.title">What Would You Like to Create?</label>
-                    <textarea
-                        id="instructions"
-                        class="form-textarea"
-                        data-translate-placeholder="instructionsCard.placeholder"
-                        placeholder="Describe what you want..."
-                        style="min-height: 140px;"
-                    ></textarea>
-                    <div class="form-help">
-                        <span>💡</span>
-                        <span data-translate="instructionsCard.help">Be as specific as possible about what you want to change or create</span>
+                    <div class="textarea-wrapper">
+                        <div class="textarea-backdrop" id="instructionsBackdrop"></div>
+                        <textarea
+                            id="instructions"
+                            class="form-textarea"
+                            data-translate-placeholder="instructionsCard.placeholder"
+                            placeholder="Describe what you want..."
+                            style="min-height: 140px;"
+                            oninput="updateInstructionsHighlight()"
+                            onscroll="syncBackdropScroll()"
+                        ></textarea>
+                    </div>
+                    <div class="form-help" style="display:flex;align-items:center;justify-content:space-between;">
+                        <span style="display:flex;align-items:center;gap:4px;">
+                            <span>💡</span>
+                            <span data-translate="instructionsCard.help">Be as specific as possible about what you want to change or create</span>
+                        </span>
+                        <button class="random-btn" id="randomBtn" onclick="randomFill()" style="padding:6px 16px;font-size:12px;">
+                            <span id="randomBtnIcon">🎲</span>
+                            <span id="randomBtnText">Random</span>
+                        </button>
                     </div>
                 </div>
-                <div class="form-field field-destino" id="field-destination">
+                <div class="form-field field-destino" id="field-destination" style="display:none">
                     <label class="form-label" for="destination" data-translate="parametersCard.destination">Destination *</label>
                     <input type="text" id="destination" class="form-input" data-translate-placeholder="parametersCard.destinationPlaceholder" placeholder="e.g., Hermosillo, CDMX" required>
                 </div>
-                <div class="form-field field-theme" id="field-theme">
+                <div class="form-field field-theme" id="field-theme" style="display:none">
                     <label class="form-label" for="theme" data-translate="parametersCard.theme">Theme</label>
                     <input type="text" id="theme" class="form-input" data-translate-placeholder="parametersCard.themePlaceholder" placeholder="e.g., Christmas, Summer">
+                </div>
+                <div class="form-field field-keys" id="field-keys">
+                    <div class="keys-inline-header">
+                        <div class="keys-header-left">
+                            <span style="font-size:14px">&#128273;</span>
+                            <label class="form-label" style="margin-bottom:0">Keys</label>
+                            <span class="keys-count-badge" id="keysCountBadge" style="display: none;">0</span>
+                        </div>
+                    </div>
+                    <div class="keys-list" id="keysList"></div>
+                    <button class="keys-add-btn" onclick="addKey()">+ Add Key</button>
+                    <div class="keys-permutation-info" id="keysPermInfo" style="display: none;">
+                        <span style="font-size:14px">&#8644;</span>
+                        <span id="keysPermText">Will generate 0 combinations</span>
+                    </div>
                 </div>
                 <div class="form-field field-element hidden" id="field-elementDescription">
                     <label class="form-label" for="elementDescription" data-translate="parametersCard.elementDescription">Previous Element Description</label>
@@ -1730,14 +1971,14 @@
             <div class="stepper-card">
                 <div class="stepper-label" data-translate="variationCard.title">Variations</div>
                 <div class="stepper">
-                    <span class="stepper-value" id="variationDisplay">1</span>
+                    <span class="stepper-value" id="variationDisplay" onclick="editVariationCount()" style="cursor:pointer" title="Click to type a number">1</span>
                     <div class="stepper-arrows">
                         <button class="stepper-btn" onclick="changeVariations(1)">▲</button>
                         <button class="stepper-btn" onclick="changeVariations(-1)">▼</button>
                     </div>
                 </div>
                 <input type="hidden" id="variationCount" value="1">
-                <div class="stepper-help" data-translate="variationCard.help">1-10 unique variations</div>
+                <div class="stepper-help" data-translate="variationCard.help">1-1000 unique variations</div>
             </div>
             <div class="sliders-card" id="slidersCard">
                 <!-- Transformeter: variations only -->
@@ -1950,10 +2191,12 @@
                         </div>
                         <div class="output-description" data-translate="outputCard.description">Copy and use these prompts in your design tool</div>
                     </div>
-                    <button class="send-all-gemini-btn" id="sendAllGeminiBtn" onclick="sendAllToGemini()">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
-                        Send All to Gemini
-                    </button>
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <button class="send-all-gemini-btn" id="sendAllGeminiBtn" onclick="sendAllToGemini()">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
+                            Send All to Gemini
+                        </button>
+                    </div>
                 </div>
                 <div class="variations-grid" id="variationsContainer">
                     <!-- Variation cards inserted here -->
@@ -2012,6 +2255,14 @@
     </div>
 
     <script>
+        // ═══ UTILITIES ═══
+        function escapeHtml(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
         // ═══ STATE ═══
         let currentProject = null;
         let selectedImages = [];
@@ -2024,6 +2275,185 @@
         let selectedShapes = [];
         let selectedPhotoStyle = null;
         let turboMode = false;
+
+        // ═══ KEYS (VARIABLES) STATE ═══
+        const DEFAULT_KEYS = [
+            { name: 'DESTINATION', placeholder: 'e.g., Hermosillo, CDMX, Cancún', isDefault: true, permute: true }
+        ];
+        let promptKeys = [];
+        let nextKeyId = 0;
+        const MAX_PERMUTATIONS = 100;
+
+        function ensureDefaultKeys() {
+            for (const dk of DEFAULT_KEYS) {
+                if (!promptKeys.find(k => k.name === dk.name && k.isDefault)) {
+                    promptKeys.unshift({ id: nextKeyId++, name: dk.name, values: '', permute: dk.permute, isDefault: true, placeholder: dk.placeholder });
+                }
+            }
+        }
+
+        // ─── Instructions ↔ Keys highlight ───
+        function updateInstructionsHighlight() {
+            const textarea = document.getElementById('instructions');
+            const backdrop = document.getElementById('instructionsBackdrop');
+            if (!textarea || !backdrop) return;
+            let text = textarea.value;
+            // Escape HTML
+            text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            // Find key names that exist in the text (case-insensitive)
+            const keyNames = promptKeys.filter(k => k.name).map(k => k.name);
+            if (keyNames.length > 0) {
+                const pattern = new RegExp(`(?:"?)(${keyNames.join('|')})(?:"?)`, 'gi');
+                text = text.replace(pattern, '<span class="key-highlight">$&</span>');
+            }
+            // Trailing newline fix for backdrop height sync
+            if (text.endsWith('\n')) text += ' ';
+            backdrop.innerHTML = text;
+            syncBackdropScroll();
+        }
+
+        function syncBackdropScroll() {
+            const textarea = document.getElementById('instructions');
+            const backdrop = document.getElementById('instructionsBackdrop');
+            if (textarea && backdrop) {
+                backdrop.scrollTop = textarea.scrollTop;
+            }
+        }
+
+        function addKey() {
+            promptKeys.push({ id: nextKeyId++, name: '', values: '', permute: true });
+            renderKeys();
+            updatePermutationInfo();
+        }
+
+        function deleteKey(btn) {
+            const row = btn.closest('.key-row');
+            const keyId = parseInt(row.dataset.keyId);
+            const key = promptKeys.find(k => k.id === keyId);
+            if (key && key.isDefault) return; // Cannot delete default keys
+            promptKeys = promptKeys.filter(k => k.id !== keyId);
+            renderKeys();
+            updatePermutationInfo();
+            updateInstructionsHighlight();
+        }
+
+        function toggleKeyPermute(btn) {
+            const row = btn.closest('.key-row');
+            const keyId = parseInt(row.dataset.keyId);
+            const key = promptKeys.find(k => k.id === keyId);
+            if (!key) return;
+            key.permute = !key.permute;
+            const dot = btn.querySelector('.key-permute-dot');
+            dot.classList.toggle('permute-active', key.permute);
+            dot.classList.toggle('permute-inactive', !key.permute);
+            updatePermutationInfo();
+        }
+
+        function onKeyNameChange(input) {
+            const row = input.closest('.key-row');
+            const keyId = parseInt(row.dataset.keyId);
+            const key = promptKeys.find(k => k.id === keyId);
+            if (key) {
+                key.name = input.value.toUpperCase().replace(/[^A-Z0-9_]/g, '');
+                input.value = key.name;
+                updateInstructionsHighlight();
+            }
+        }
+
+        function onKeyValuesChange(input) {
+            const row = input.closest('.key-row');
+            const keyId = parseInt(row.dataset.keyId);
+            const key = promptKeys.find(k => k.id === keyId);
+            if (key) key.values = input.value;
+            updatePermutationInfo();
+        }
+
+        function renderKeys() {
+            const list = document.getElementById('keysList');
+            list.innerHTML = promptKeys.map(key => `
+                <div class="key-row${key.isDefault ? ' key-row-default' : ''}" data-key-id="${key.id}">
+                    <input class="key-name-input" placeholder="KEY_NAME" value="${key.name}"
+                           oninput="onKeyNameChange(this)" maxlength="30"${key.isDefault ? ' readonly style="opacity:0.7;cursor:default"' : ''}>
+                    <span class="key-equals">=</span>
+                    <input class="key-values-input" placeholder="${key.placeholder || 'value1, value2, value3'}"
+                           value="${(key.values || '').replace(/"/g, '&quot;')}" oninput="onKeyValuesChange(this)">
+                    <button class="key-permute-toggle" onclick="toggleKeyPermute(this)"
+                            title="${key.permute ? 'Permutation ON' : 'Single mode'}">
+                        <span class="key-permute-dot ${key.permute ? 'permute-active' : 'permute-inactive'}"></span>
+                    </button>
+                    ${key.isDefault ? '<span class="key-delete-btn" style="visibility:hidden">&times;</span>' : '<button class="key-delete-btn" onclick="deleteKey(this)" title="Remove key">&times;</button>'}
+                </div>
+            `).join('');
+            const badge = document.getElementById('keysCountBadge');
+            const userKeys = promptKeys.filter(k => !k.isDefault);
+            if (userKeys.length > 0) {
+                badge.style.display = 'inline-block';
+                badge.textContent = `${userKeys.length} key${userKeys.length > 1 ? 's' : ''}`;
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+
+        function updatePermutationInfo() {
+            const infoDiv = document.getElementById('keysPermInfo');
+            const textSpan = document.getElementById('keysPermText');
+            const permutedKeys = promptKeys.filter(k => k.permute && k.name && k.values.trim());
+            if (permutedKeys.length === 0) { infoDiv.style.display = 'none'; return; }
+            const counts = permutedKeys.map(k => parseKeyValues(k.values).length);
+            const keyCombos = counts.reduce((a, b) => a * b, 1);
+            const variations = parseInt(document.getElementById('variationCount')?.value) || 1;
+            const total = keyCombos * variations;
+            infoDiv.style.display = 'flex';
+            if (total > MAX_PERMUTATIONS) {
+                infoDiv.style.borderLeftColor = 'var(--rojo)';
+                infoDiv.style.background = 'rgba(239,68,68,0.08)';
+                infoDiv.style.color = 'var(--rojo)';
+                textSpan.textContent = `${total} combinations exceeds limit of ${MAX_PERMUTATIONS}`;
+            } else {
+                infoDiv.style.borderLeftColor = 'var(--verde)';
+                infoDiv.style.background = 'var(--verde-light)';
+                infoDiv.style.color = '#558b2f';
+                const parts = [];
+                if (keyCombos > 1) parts.push(`${keyCombos} key combos`);
+                if (variations > 1) parts.push(`${variations} variations`);
+                textSpan.textContent = `Will generate ${total} prompt${total > 1 ? 's' : ''}${parts.length > 1 ? ` (${parts.join(' × ')})` : ''}`;
+            }
+        }
+
+        function parseKeyValues(str) {
+            return str.split(',').map(v => v.trim()).filter(v => v.length > 0);
+        }
+
+        function cartesianProduct(arrays) {
+            if (arrays.length === 0) return [[]];
+            return arrays.reduce((acc, curr) => acc.flatMap(combo => curr.map(val => [...combo, val])), [[]]);
+        }
+
+        function resolveKeyPermutations(instructionText, keys) {
+            const definedKeys = keys.filter(k => k.name && k.values.trim());
+            if (definedKeys.length === 0) return [instructionText];
+            const permutedKeys = definedKeys.filter(k => k.permute);
+            const staticKeys = definedKeys.filter(k => !k.permute);
+            let baseText = instructionText;
+            // Case-insensitive match, with or without quotes around key name
+            for (const key of staticKeys) {
+                baseText = baseText.replace(new RegExp(`"?${key.name}"?`, 'gi'), key.values.trim());
+            }
+            if (permutedKeys.length === 0) return [baseText];
+            const valueArrays = permutedKeys.map(k => parseKeyValues(k.values));
+            const combinations = cartesianProduct(valueArrays);
+            if (combinations.length > MAX_PERMUTATIONS) {
+                alert(`Too many permutations (${combinations.length}). Max is ${MAX_PERMUTATIONS}. Reduce key values.`);
+                return null;
+            }
+            return combinations.map(combo => {
+                let text = baseText;
+                permutedKeys.forEach((key, i) => {
+                    text = text.replace(new RegExp(`"?${key.name}"?`, 'gi'), combo[i]);
+                });
+                return text;
+            });
+        }
 
         // ═══ TURBO MODE ═══
         function handleTurboClick() {
@@ -2171,7 +2601,10 @@
         function autoFillFields(data) {
             console.log('🤖 Auto-filling fields with data:', data);
             if (data.instructions) document.getElementById('instructions').value = data.instructions;
-            if (data.destination) { const el = document.getElementById('destination'); if (el) el.value = data.destination; }
+            if (data.destination) {
+                const dk = promptKeys.find(k => k.isDefault && k.name === 'DESTINATION');
+                if (dk) { dk.values = data.destination; renderKeys(); updatePermutationInfo(); }
+            }
             if (data.theme) { const el = document.getElementById('theme'); if (el) el.value = data.theme; }
 
             // Set dropdowns
@@ -2248,7 +2681,7 @@
                     help: 'Be as specific as possible about what you want to change or create'
                 },
                 template: { title: '📋 Quick Template', copyBtn: 'Copy' },
-                variationCard: { title: 'Variations', description: 'Each variation generated with unique approach', help: '1-10 unique variations' },
+                variationCard: { title: 'Variations', description: 'Each variation generated with unique approach', help: '1-1000 unique variations' },
                 imageCard: {
                     title: 'Reference Images (Optional)',
                     description: 'Upload images to guide design generation',
@@ -2334,7 +2767,7 @@
                 alerts: {
                     selectProject: 'Please select a project first!',
                     provideInstructions: 'Please provide instructions!',
-                    variationRange: 'Please enter 1-10 for variations',
+                    variationRange: 'Please enter 1-1000 for variations',
                     clearImages: 'Remove all images and shape references?',
                     settingsSaved: 'Settings saved! Using Claude API.',
                     settingsSavedTemplate: 'Settings saved! Using template mode.'
@@ -2455,7 +2888,7 @@
                 alerts: {
                     selectProject: '¡Selecciona un proyecto primero!',
                     provideInstructions: '¡Proporciona instrucciones!',
-                    variationRange: 'Ingresa 1-10 para variaciones',
+                    variationRange: 'Ingresa 1-1000 para variaciones',
                     clearImages: '¿Eliminar todas las imágenes y referencias?',
                     settingsSaved: '¡Configuración guardada! Usando API de Claude.',
                     settingsSavedTemplate: '¡Configuración guardada! Usando modo plantilla.'
@@ -2531,7 +2964,10 @@
             }
             // Style dropdown - update "no style" option
             const noStyle = document.getElementById('noStyleOption');
-            if (noStyle) noStyle.textContent = '🚫 ' + t.styleCard.noStyle;
+            if (noStyle) {
+                const span = noStyle.querySelector('span');
+                if (span) span.textContent = '🚫 ' + t.styleCard.noStyle;
+            }
         }
 
 
@@ -2560,9 +2996,22 @@
             const input = document.getElementById('variationCount');
             const display = document.getElementById('variationDisplay');
             let val = parseInt(input.value) || 1;
-            val = Math.max(1, Math.min(10, val + delta));
+            val = Math.max(1, Math.min(1000, val + delta));
             input.value = val;
             display.textContent = val;
+            updatePermutationInfo();
+        }
+
+        function editVariationCount() {
+            const val = prompt('Enter number of variations (1-1000):', document.getElementById('variationCount').value);
+            if (val !== null) {
+                let num = parseInt(val);
+                if (!isNaN(num) && num >= 1 && num <= 1000) {
+                    document.getElementById('variationCount').value = num;
+                    document.getElementById('variationDisplay').textContent = num;
+                    updatePermutationInfo();
+                }
+            }
         }
 
         // ═══ DROPDOWN HANDLERS ═══
@@ -2733,8 +3182,13 @@
                 if (el) el.classList.toggle('hidden', !visible);
             };
 
-            showField('field-destination', !isModify);
-            showField('field-theme', isVariations || isFromScratch);
+            showField('field-destination', false); // Destination is now a default key
+            showField('field-theme', false);
+            showField('field-keys', !isModify);
+            // Ensure default keys exist when project is selected
+            ensureDefaultKeys();
+            renderKeys();
+            updatePermutationInfo();
             showField('field-elementDescription', isPreviousElement);
 
             // Sliders visibility
@@ -3071,15 +3525,46 @@
 
         // ═══ GENERATE PROMPTS ═══
         async function generatePrompts() {
+            const genBtn = document.getElementById('generateBtn');
+            if (genBtn.disabled) return; // Prevent double-click
             if (!currentProject) { alert(translations[currentLanguage].alerts.selectProject); return; }
             const instructions = document.getElementById('instructions').value;
             if (!instructions.trim()) { alert(translations[currentLanguage].alerts.provideInstructions); return; }
-            const variationCount = parseInt(document.getElementById('variationCount').value) || 1;
-            if (variationCount < 1 || variationCount > 10) { alert(translations[currentLanguage].alerts.variationRange); return; }
+
+            // Disable button during generation
+            genBtn.disabled = true;
+            genBtn.style.opacity = '0.6';
+            genBtn.style.pointerEvents = 'none';
+            const restoreBtn = () => { genBtn.disabled = false; genBtn.style.opacity = ''; genBtn.style.pointerEvents = ''; };
+            let variationCount = parseInt(document.getElementById('variationCount').value) || 1;
+            if (variationCount < 1 || variationCount > 1000) { alert(translations[currentLanguage].alerts.variationRange); restoreBtn(); return; }
+
+            // ─── KEY PERMUTATION RESOLUTION ───
+            const resolvedInstructions = resolveKeyPermutations(instructions, promptKeys);
+            if (resolvedInstructions === null) { restoreBtn(); return; }
+            const hasKeyCombos = resolvedInstructions.length > 1;
+
+            // Multiply: each key combo × variationCount
+            let allInstructions = resolvedInstructions;
+            if (hasKeyCombos && variationCount > 1) {
+                allInstructions = [];
+                for (const inst of resolvedInstructions) {
+                    for (let v = 0; v < variationCount; v++) {
+                        allInstructions.push(inst);
+                    }
+                }
+            }
+            const usePermutedMode = allInstructions.length > 1;
+            if (usePermutedMode) variationCount = allInstructions.length;
 
             const formData = new FormData();
             formData.append('projectType', currentProject);
-            formData.append('instructions', instructions);
+            if (usePermutedMode) {
+                formData.append('permutedInstructions', JSON.stringify(allInstructions));
+                formData.append('instructions', allInstructions[0]);
+            } else {
+                formData.append('instructions', allInstructions[0]);
+            }
             formData.append('variationCount', variationCount);
             formData.append('productType', selectedProduct);
 
@@ -3100,7 +3585,15 @@
             if (selectedPhotoStyle) formData.append('photoStyle', selectedPhotoStyle);
             if (turboMode) formData.append('turboMode', 'true');
 
-            ['destination', 'theme', 'level', 'format', 'elementDescription', 'modificationType'].forEach(field => {
+            // Get destination from the DESTINATION default key
+            const destKey = promptKeys.find(k => k.isDefault && k.name === 'DESTINATION');
+            if (destKey && destKey.values.trim()) {
+                formData.append('destination', destKey.values.trim());
+                // Also sync to hidden field for compatibility
+                const destEl = document.getElementById('destination');
+                if (destEl) destEl.value = destKey.values.trim();
+            }
+            ['theme', 'level', 'format', 'elementDescription', 'modificationType'].forEach(field => {
                 const el = document.getElementById(field);
                 if (el) formData.append(field, el.value);
             });
@@ -3139,12 +3632,13 @@
                 projectType: currentProject, instructions, variationCount,
                 productType: selectedProduct, style: selectedStyle, ratio: selectedRatio,
                 turboMode,
-                destination: document.getElementById('destination')?.value || '',
+                destination: (promptKeys.find(k => k.isDefault && k.name === 'DESTINATION')?.values) || '',
                 theme: document.getElementById('theme')?.value || '',
                 level: document.getElementById('level')?.value || '',
                 decorationLevel: document.getElementById('decoration')?.value || '',
                 crazymeter: document.getElementById('crazymeter')?.value || '',
-                prompts: []
+                prompts: [],
+                promptKeys: promptKeys.length > 0 ? JSON.parse(JSON.stringify(promptKeys)) : []
             };
 
             try {
@@ -3166,7 +3660,8 @@
 
                     for (const line of lines) {
                         if (line.startsWith('data: ')) {
-                            const data = JSON.parse(line.slice(6));
+                            let data;
+                            try { data = JSON.parse(line.slice(6)); } catch (e) { console.warn('Malformed SSE data:', line); continue; }
                             if (data.type === 'start') {
                                 totalCount = data.total;
                                 const statusDiv = document.getElementById('streamingStatus');
@@ -3197,7 +3692,9 @@
                     }
                 }
             } catch (error) {
-                variationsContainer.innerHTML = `<div class="loading"><div class="loading-text" style="color: var(--rojo);">Error: ${error.message}</div></div>`;
+                variationsContainer.innerHTML = `<div class="loading"><div class="loading-text" style="color: var(--rojo);">Error: ${escapeHtml(error.message)}</div></div>`;
+            } finally {
+                restoreBtn();
             }
         }
 
@@ -3276,7 +3773,7 @@
                         </button>
                     </div>
                 </div>
-                <div class="prompt-output" id="prompt-${index}">${variation.prompt}</div>
+                <div class="prompt-output" id="prompt-${index}">${escapeHtml(variation.prompt)}</div>
             `;
             container.appendChild(card);
         }
@@ -3309,6 +3806,7 @@
 
         async function collectAllImageData() {
             const images = [];
+            // Style reference is for Claude's style analysis only — NOT sent as reference to Gemini
             for (let i = 0; i < selectedImages.length; i++) {
                 const dataUrl = await fileToDataUrl(selectedImages[i]);
                 images.push({ dataUrl, name: selectedImages[i].name || `upload-${i}.${getExtFromDataUrl(dataUrl)}` });
@@ -3338,8 +3836,11 @@
         }
 
         async function sendToGemini(index) {
-            const text = document.getElementById(`prompt-${index}`).textContent;
             const btn = document.getElementById(`gemini-btn-${index}`);
+            if (btn.disabled) return;
+            btn.disabled = true;
+            setTimeout(() => { btn.disabled = false; }, 3000);
+            const text = document.getElementById(`prompt-${index}`).textContent;
             const originalHTML = btn.innerHTML;
             btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin-icon"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> Sending...';
             btn.classList.add('sent');
@@ -3401,6 +3902,95 @@
         // ═══ SETTINGS ═══
         function openSettings() { document.getElementById('settingsModal').classList.add('visible'); const k = localStorage.getItem('claudeApiKey'); if (k) document.getElementById('apiKey').value = k; }
         function closeSettings() { document.getElementById('settingsModal').classList.remove('visible'); }
+
+        // Close modals on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const settings = document.getElementById('settingsModal');
+                if (settings && settings.classList.contains('visible')) { closeSettings(); return; }
+                const history = document.getElementById('historySidebar');
+                if (history && history.classList.contains('open')) { toggleHistory(); }
+            }
+        });
+        // ═══ RANDOM FILL ═══
+        let _randomAbort = null;       // AbortController for in-flight request
+        let _randomState = 'idle';     // idle | generating | cancelling
+
+        async function randomFill() {
+            const btn = document.getElementById('randomBtn');
+            const iconEl = document.getElementById('randomBtnIcon');
+            const textEl = document.getElementById('randomBtnText');
+
+            // STATE: generating → cancel it
+            if (_randomState === 'generating') {
+                _randomState = 'cancelling';
+                if (_randomAbort) _randomAbort.abort();
+                iconEl.textContent = '✕';
+                textEl.textContent = 'Cancelling...';
+                return;
+            }
+
+            // STATE: cancelling → ignore clicks until abort completes
+            if (_randomState === 'cancelling') return;
+
+            // STATE: idle → start generating
+            _randomState = 'generating';
+            _randomAbort = new AbortController();
+            iconEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin-icon"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>';
+            textEl.textContent = 'Thinking...';
+
+            try {
+                const hint = document.getElementById('instructions').value.trim();
+                const resp = await fetch('/api/random-fill', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ hint, currentProject: currentProject }),
+                    signal: _randomAbort.signal
+                });
+                const result = await resp.json();
+
+                if (result.success && result.data) {
+                    const d = result.data;
+                    if (d.instructions) { document.getElementById('instructions').value = d.instructions; updateInstructionsHighlight(); }
+                    const destInput = document.getElementById('destination');
+                    if (destInput && d.destination) destInput.value = d.destination;
+                    const themeInput = document.getElementById('theme');
+                    if (themeInput && d.theme) themeInput.value = d.theme;
+                    if (d.style) {
+                        document.querySelectorAll('#styleMultiOptions input[type="checkbox"]').forEach(cb => { cb.checked = false; });
+                        const matchCb = document.querySelector(`#styleMultiOptions input[value="${d.style}"]`);
+                        if (matchCb) { matchCb.checked = true; toggleStyleOption(matchCb); }
+                    }
+                    if (d.ratio) { const ratioDD = document.getElementById('ratioDropdown'); if (ratioDD) ratioDD.value = d.ratio; }
+                    if (d.productType) { const prodDD = document.getElementById('productDropdown'); if (prodDD) { prodDD.value = d.productType; if (typeof onProductChange === 'function') onProductChange(d.productType); } }
+                    if (d.variationCount) { const vc = Math.min(Math.max(parseInt(d.variationCount) || 1, 1), 10); document.getElementById('variationCount').value = vc; document.getElementById('variationDisplay').textContent = vc; }
+                    if (d.level) { const s = document.getElementById('level'); if (s) { s.value = d.level; updateSlider('level', 'levelValue'); } }
+                    if (d.decorationLevel) { const s = document.getElementById('decoration'); if (s) { s.value = d.decorationLevel; updateSlider('decoration', 'decorationValue'); } }
+
+                    iconEl.textContent = '✓';
+                    textEl.textContent = 'Filled!';
+                    setTimeout(() => { iconEl.textContent = '🎲'; textEl.textContent = 'Random'; }, 1500);
+                } else {
+                    iconEl.textContent = '✗';
+                    textEl.textContent = 'Retry';
+                    setTimeout(() => { iconEl.textContent = '🎲'; textEl.textContent = 'Random'; }, 2000);
+                }
+            } catch (err) {
+                if (err.name === 'AbortError') {
+                    // Cancelled by user — reset to idle
+                    iconEl.textContent = '🎲';
+                    textEl.textContent = 'Random';
+                } else {
+                    console.error('Random fill error:', err);
+                    iconEl.textContent = '🎲';
+                    textEl.textContent = 'Random';
+                }
+            } finally {
+                _randomState = 'idle';
+                _randomAbort = null;
+            }
+        }
+
         function saveSettings() {
             const k = document.getElementById('apiKey').value;
             if (k) { localStorage.setItem('claudeApiKey', k); alert(translations[currentLanguage].alerts.settingsSaved); }
@@ -3502,10 +4092,10 @@
                             <div class="history-item-date">${timeAgo}</div>
                         </div>
                         <div class="history-item-summary">
-                            ${item.destination ? `<span class="dest-tag">📍 ${item.destination}</span>` : ''}
-                            <span>${summary || 'Design prompt'}</span>
+                            ${item.destination ? `<span class="dest-tag">📍 ${escapeHtml(item.destination)}</span>` : ''}
+                            <span>${escapeHtml(summary) || 'Design prompt'}</span>
                         </div>
-                        ${chips.length > 0 ? `<div class="history-item-chips">${chips.map(c => `<span class="history-chip">${c}</span>`).join('')}</div>` : ''}
+                        ${chips.length > 0 ? `<div class="history-item-chips">${chips.map(c => `<span class="history-chip">${escapeHtml(c)}</span>`).join('')}</div>` : ''}
                         <div class="history-item-actions">
                             <button class="history-action-btn copy" onclick="copyFromHistory(${item.id})">${translations[currentLanguage].history.copy}</button>
                             <button class="history-action-btn gemini-hist" onclick="geminiFromHistory(${item.id})">Gemini</button>
@@ -3548,8 +4138,11 @@
 
             setTimeout(() => {
                 if (item.instructions) document.getElementById('instructions').value = item.instructions;
-                const dest = document.getElementById('destination');
-                if (dest && item.destination) dest.value = item.destination;
+                // Restore destination into DESTINATION key
+                if (item.destination) {
+                    const dk = promptKeys.find(k => k.isDefault && k.name === 'DESTINATION');
+                    if (dk) { dk.values = item.destination; renderKeys(); updatePermutationInfo(); }
+                }
                 const theme = document.getElementById('theme');
                 if (theme && item.theme) theme.value = item.theme;
 
@@ -3561,8 +4154,10 @@
 
                 // Dropdowns
                 if (item.style) {
-                    const dd = document.getElementById('styleDropdown');
-                    if (dd) { dd.value = item.style; onStyleChange(item.style); }
+                    // Uncheck all style checkboxes first, then check the matching one
+                    document.querySelectorAll('#styleMultiOptions input[type="checkbox"]').forEach(cb => { cb.checked = false; });
+                    const matchCb = document.querySelector(`#styleMultiOptions input[value="${item.style}"]`);
+                    if (matchCb) { matchCb.checked = true; toggleStyleOption(matchCb); }
                 }
                 if (item.ratio) {
                     const dd = document.getElementById('ratioDropdown');
@@ -3595,13 +4190,15 @@
                     selectedRatio, selectedProduct, selectedPhotoStyle, turboMode,
                     instructions: document.getElementById('instructions')?.value || '',
                     variationCount: document.getElementById('variationCount')?.value || '1',
-                    destination: document.getElementById('destination')?.value || '',
+                    destination: (promptKeys.find(k => k.isDefault && k.name === 'DESTINATION')?.values) || document.getElementById('destination')?.value || '',
                     theme: document.getElementById('theme')?.value || '',
                     decoration: document.getElementById('decoration')?.value || '',
                     crazymeter: document.getElementById('crazymeter')?.value || '',
                     level: document.getElementById('level')?.value || '',
                     imageDataUrls: imageDataUrls,
                     styleReferenceDataUrl: styleReferenceDataUrl || null,
+                    promptKeys: promptKeys,
+                    nextKeyId: nextKeyId,
                     outputHTML: document.getElementById('variationsContainer')?.innerHTML || '',
                     outputVisible: document.getElementById('outputSection')?.classList.contains('visible') || false,
                     timestamp: Date.now()
@@ -3658,6 +4255,21 @@
                     // Turbo
                     if (s.turboMode) { const t = document.getElementById('turboToggle'); if (t && !t.checked) { t.checked = true; toggleTurboMode(true); } }
 
+                    // Keys
+                    if (s.promptKeys?.length > 0) {
+                        promptKeys = s.promptKeys;
+                        nextKeyId = s.nextKeyId || promptKeys.length;
+                    }
+                    // Ensure default keys always exist (even if session had none)
+                    ensureDefaultKeys();
+                    // If session had a destination value, populate the DESTINATION key
+                    if (s.destination) {
+                        const dk = promptKeys.find(k => k.isDefault && k.name === 'DESTINATION');
+                        if (dk && !dk.values) dk.values = s.destination;
+                    }
+                    renderKeys();
+                    updatePermutationInfo();
+
                     // Images
                     if (s.imageDataUrls?.length > 0) { imageDataUrls = s.imageDataUrls; refreshImagePreviews(); }
 
@@ -3677,9 +4289,11 @@
             } catch(e) { console.warn('Session restore failed:', e.message); }
         }
 
-        // Auto-save
-        document.addEventListener('input', () => setTimeout(saveSession, 300));
-        document.addEventListener('click', () => setTimeout(saveSession, 300));
+        // Auto-save (debounced)
+        let _saveTimer = null;
+        function debouncedSave() { clearTimeout(_saveTimer); _saveTimer = setTimeout(saveSession, 1500); }
+        document.addEventListener('input', debouncedSave);
+        document.addEventListener('click', debouncedSave);
 
         const _origDisplayVariation = displayVariation;
         displayVariation = function(variation, index) {
@@ -3696,6 +4310,173 @@
             const savedLang = localStorage.getItem('language');
             if (savedLang) setLanguage(savedLang);
             updateHistoryBadge();
+
+            // Auto-fill from URL params (sent by AXKAN admin dashboard)
+            const params = new URLSearchParams(window.location.search);
+            if (params.has('destination') || params.has('theme') || params.has('instructions')) {
+                // Small delay to ensure form is fully initialized
+                setTimeout(() => {
+                    const dest = params.get('destination');
+                    const theme = params.get('theme');
+                    const instructions = params.get('instructions');
+                    const product = params.get('product');
+                    const quantity = params.get('quantity');
+                    const client = params.get('client');
+
+                    // Fill destination via default keys system
+                    if (dest) {
+                        const destInput = document.getElementById('destination');
+                        if (destInput) destInput.value = dest;
+                        // Also try to set it as a default key
+                        const dk = typeof defaultKeys !== 'undefined' && defaultKeys.find(k => k.name === 'DESTINATION');
+                        if (dk) { dk.values = dest; if (typeof renderKeys === 'function') renderKeys(); }
+                    }
+
+                    // Fill theme
+                    if (theme) {
+                        const themeInput = document.getElementById('theme');
+                        if (themeInput) themeInput.value = theme;
+                    }
+
+                    // Fill instructions
+                    if (instructions) {
+                        const instrInput = document.getElementById('instructions');
+                        if (instrInput) {
+                            instrInput.value = instructions;
+                            if (typeof updateInstructionsHighlight === 'function') updateInstructionsHighlight();
+                        }
+                    }
+
+                    // Select product type
+                    if (product) {
+                        const prodDD = document.getElementById('productDropdown');
+                        if (prodDD) { prodDD.value = product; if (typeof onProductChange === 'function') onProductChange(product); }
+                    }
+
+                    // Fill variations count
+                    var variations = params.get('variations');
+                    if (variations) {
+                        var vc = Math.min(Math.max(parseInt(variations) || 1, 1), 10);
+                        var vcInput = document.getElementById('variationCount');
+                        var vcDisplay = document.getElementById('variationDisplay');
+                        if (vcInput) vcInput.value = vc;
+                        if (vcDisplay) vcDisplay.textContent = vc;
+                    }
+
+                    // Fill crazymeter
+                    var crazymeter = params.get('crazymeter');
+                    if (crazymeter) {
+                        var cmSlider = document.getElementById('crazymeter');
+                        if (cmSlider) { cmSlider.value = crazymeter; cmSlider.dispatchEvent(new Event('input')); }
+                        // Show crazymeter slider if hidden
+                        var cmGroup = document.getElementById('slider-crazymeter');
+                        if (cmGroup) cmGroup.classList.remove('hidden');
+                    }
+
+                    // Fill level (detail)
+                    var level = params.get('level');
+                    if (level) {
+                        var lvSlider = document.getElementById('level');
+                        if (lvSlider) { lvSlider.value = level; if (typeof updateSlider === 'function') updateSlider('level', 'levelValue'); }
+                    }
+
+                    // Fill decoration
+                    var decoration = params.get('decoration');
+                    if (decoration) {
+                        var decSlider = document.getElementById('decoration');
+                        if (decSlider) { decSlider.value = decoration; if (typeof updateSlider === 'function') updateSlider('decoration', 'decorationValue'); }
+                    }
+
+                    // Fill ratio
+                    var ratio = params.get('ratio');
+                    if (ratio) {
+                        var ratioDD = document.getElementById('ratioDropdown');
+                        if (ratioDD) { ratioDD.value = ratio; if (typeof onRatioChange === 'function') onRatioChange(ratio); }
+                    }
+
+                    // Fill DESTINATION key
+                    var keysDest = params.get('keys_destination');
+                    if (keysDest && typeof defaultKeys !== 'undefined') {
+                        var dk = defaultKeys.find(function(k) { return k.name === 'DESTINATION'; });
+                        if (dk) { dk.values = keysDest; }
+                    }
+
+                    // Fill DESIGN ELEMENTS as additional keys
+                    var keysElements = params.get('keys_elements');
+                    if (keysElements && typeof defaultKeys !== 'undefined') {
+                        // Add a new key for design elements if it doesn't exist
+                        var existingKey = defaultKeys.find(function(k) { return k.name === 'ELEMENTS'; });
+                        if (!existingKey) {
+                            defaultKeys.push({ name: 'ELEMENTS', values: keysElements });
+                        } else {
+                            existingKey.values = keysElements;
+                        }
+                    }
+
+                    // Render keys and update permutations
+                    if (typeof renderKeys === 'function') renderKeys();
+                    if (typeof updatePermutationInfo === 'function') updatePermutationInfo();
+
+                    // Load reference images from client WhatsApp messages
+                    var imagesParam = params.get('images');
+                    if (imagesParam) {
+                        var imageUrls = imagesParam.split(',').filter(function(u) { return u.trim(); });
+                        if (imageUrls.length > 0) {
+                            // Show image upload section
+                            var imgSection = document.getElementById('imageUploadSection');
+                            if (imgSection) imgSection.style.display = '';
+
+                            // Add each image URL as a reference image
+                            imageUrls.forEach(function(url, idx) {
+                                if (typeof imageDataUrls !== 'undefined') {
+                                    imageDataUrls.push(url);
+                                }
+                                if (typeof addImageToPreview === 'function') {
+                                    addImageToPreview(url, idx, true);
+                                }
+                            });
+
+                            // Update image count badge
+                            var countDisplay = document.getElementById('imageCountDisplay');
+                            var countEl = document.getElementById('imageCount');
+                            if (countDisplay && countEl) {
+                                countDisplay.style.display = '';
+                                countEl.textContent = imageUrls.length;
+                            }
+                        }
+                    }
+
+                    // Show controls row if hidden
+                    var controlsRow = document.getElementById('controlsRow');
+                    if (controlsRow) controlsRow.style.display = '';
+
+                    // Show a notification that data was received from AXKAN dashboard
+                    var banner = document.createElement('div');
+                    banner.style.cssText = 'position:fixed;top:12px;right:12px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;padding:12px 20px;border-radius:12px;font-size:14px;font-weight:600;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.15);animation:slideIn 0.3s ease;';
+                    banner.textContent = '\uD83C\uDFA8 Datos recibidos de AXKAN' + (client ? ' — Cliente: ' + client : '');
+                    document.body.appendChild(banner);
+                    setTimeout(function() { banner.remove(); }, 4000);
+
+                    // Show the main form if hidden
+                    var mainForm = document.getElementById('mainForm');
+                    if (mainForm) mainForm.style.display = '';
+
+                    // Auto-click generate after a short delay to let form settle
+                    var autoGenerate = params.get('auto') !== 'false';
+                    if (autoGenerate) {
+                        setTimeout(function() {
+                            var genBtn = document.getElementById('generateBtn');
+                            if (genBtn && typeof generatePrompts === 'function') {
+                                banner.textContent = '\u2699\uFE0F Generando prompts automaticamente...';
+                                generatePrompts();
+                            }
+                        }, 1000);
+                    }
+
+                    // Clean URL params without reloading
+                    window.history.replaceState({}, '', window.location.pathname);
+                }, 500);
+            }
         });
     </script>
 </body>
